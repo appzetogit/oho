@@ -66,6 +66,40 @@ const genderMap = (g) => {
 const paymentMap = (p) => (String(p) === '1' ? 'cash' : 'online');
 
 /**
+ * MySQL hands back zone boundaries as WKT (the export runs ST_AsText on the
+ * geometry columns). Zone.js wants GeoJSON, so parse POLYGON / MULTIPOLYGON
+ * into the {type, coordinates} shape. Returns undefined on anything unexpected
+ * rather than storing a half-parsed boundary.
+ */
+const wktToGeoJson = (wkt) => {
+  if (!wkt) return undefined;
+  const text = wkt.trim().toUpperCase();
+  const ring = (s) =>
+    s
+      .split(',')
+      .map((pair) => pair.trim().split(/\s+/).map(Number))
+      .filter((c) => c.length === 2 && c.every(Number.isFinite));
+
+  try {
+    if (text.startsWith('MULTIPOLYGON')) {
+      const body = wkt.slice(wkt.indexOf('(') + 1, wkt.lastIndexOf(')'));
+      const polys = body.match(/\(\([^)]*\)(?:\s*,\s*\([^)]*\))*\)/g) || [];
+      const coordinates = polys.map((p) =>
+        (p.match(/\(([^()]*)\)/g) || []).map((r) => ring(r.slice(1, -1))),
+      );
+      return coordinates.length ? { type: 'MultiPolygon', coordinates } : undefined;
+    }
+    if (text.startsWith('POLYGON')) {
+      const rings = (wkt.match(/\(([^()]*)\)/g) || []).map((r) => ring(r.slice(1, -1)));
+      return rings.length ? { type: 'Polygon', coordinates: rings } : undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+};
+
+/**
  * MySQL let the same mobile be registered many times; Mongo makes phone unique.
  * Rather than drop the extras (which would orphan their rides), pick one winner
  * per phone and point every duplicate's legacy id at it, so foreign keys still
@@ -151,7 +185,7 @@ const write = async (collection, docs) => {
   for (let i = 0; i < ops.length; i += 500) {
     try {
       const r = await db.collection(collection).bulkWrite(ops.slice(i, i + 500), { ordered: false });
-      written += r.upsertedCount + r.modifiedCount + r.matchedCount;
+      written += r.upsertedCount + r.matchedCount;  // matched covers modified
     } catch (e) {
       // Summarise instead of dumping the driver's multi-thousand-line error.
       const errs = e.writeErrors || e.result?.writeErrors || [];
@@ -234,16 +268,27 @@ await seedMap('taxizones', map.zone);
 const zones = load('zones').map((r) => {
   const _id = map.zone.get(String(r.id)) || oid();
   map.zone.set(String(r.id), _id);
+  // Field names here must match Zone.js exactly, or the app silently ignores them.
   return {
     _id,
     legacyId: String(r.id),
     name: str(r.name),
-    serviceLocationId: map.location.get(String(r.service_location_id)) || null,
-    // MULTIPOLYGON arrives as WKT text; kept verbatim so it can be converted later.
-    boundaryWkt: str(r.coordinates),
-    lat: num(r.lat),
-    lng: num(r.lng),
+    service_location_id: map.location.get(String(r.service_location_id)) || null,
+    unit: str(r.unit, 'km'),
+    boundary_mode: 'polygon',
+    // MULTIPOLYGON arrives from MySQL as WKT text; convert to GeoJSON.
+    geometry: wktToGeoJson(str(r.coordinates)),
+    circle_center:
+      num(r.lat) && num(r.lng)
+        ? { type: 'Point', coordinates: [num(r.lng), num(r.lat)] }
+        : undefined,
+    maximum_distance_for_regular_rides: num(r.maximum_distance),
+    maximum_distance_for_outstation_rides: num(r.maximum_outstation_distance),
+    peak_zone_radius: num(r.peak_zone_radius),
+    peak_zone_duration: num(r.peak_zone_duration),
+    peak_zone_ride_count: num(r.peak_zone_ride_count),
     active: bool(r.active),
+    status: bool(r.active) ? 'active' : 'inactive',
     createdAt: date(r.created_at) || new Date(),
     updatedAt: date(r.updated_at) || new Date(),
   };

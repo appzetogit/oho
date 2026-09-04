@@ -305,6 +305,23 @@ const driverSchema = new mongoose.Schema(
         default: false,
       },
     },
+    rewardPoints: {
+      balance: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      totalCollected: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      totalSpent: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+    },
     bankDetails: {
       accountHolderName: {
         type: String,

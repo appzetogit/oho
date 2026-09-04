@@ -45,6 +45,11 @@ $tables = [
     'request_cancellation_fees',
     // chat
     'conversations', 'messages',
+    // phase 2: pricing, loyalty, owner money and remaining config
+    'reward_points', 'owner_wallets', 'sub_vehicle_types',
+    'subscriptions', 'subscription_details', 'onboarding_screen',
+    'banner_images', 'favourite_locations', 'mail_templates',
+    'package_types', 'preferences', 'driver_preferences', 'career_applications',
 ];
 
 @mkdir($outDir, 0755, true);

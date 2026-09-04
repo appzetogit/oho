@@ -604,6 +604,24 @@ const rideSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // What was actually charged for this cancellation. SetPrice holds the rate;
+    // this records the fee that was levied on a particular ride.
+    cancellationFee: {
+      amount: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      chargedTo: {
+        type: String,
+        enum: ['user', 'driver', ''],
+        default: '',
+      },
+      isPaid: {
+        type: Boolean,
+        default: false,
+      },
+    },
     feedback: {
       rating: {
         type: Number,
