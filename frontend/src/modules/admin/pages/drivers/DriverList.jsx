@@ -70,6 +70,10 @@ const DriverList = ({ mode = 'approved' }) => {
           onlineSelfieImage: d.online_selfie_image || '',
           onlineSelfieCapturedAt: d.online_selfie_captured_at || null,
           registeredAt: d.createdAt || null,
+          // Must be carried through: the row rendered below only sees the
+          // fields built here, so leaving this out made every driver read
+          // 0.00 no matter what the API returned.
+          walletBalance: Number(d.wallet_balance ?? d.wallet?.balance ?? 0),
           status: mode === 'active' ? 'Online' : (d.approve ? 'Approved' : (d.status || 'Approved')),
         }));
         setDrivers(approved);
@@ -385,11 +389,24 @@ const DriverList = ({ mode = 'approved' }) => {
                     <td className="px-3 py-1.5 text-right">
                       <button
                         onClick={() => navigate(`/admin/drivers/${driver.id}?tab=Payment History`)}
-                        className="inline-flex items-center gap-1 font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded text-[11px] transition-colors"
-                        title="Manage Driver Wallet"
+                        // A negative balance is cash the driver owes, so it must not
+                        // read as the same healthy green as money in hand.
+                        className={`inline-flex items-center gap-1 font-semibold border px-2 py-0.5 rounded text-[11px] transition-colors ${
+                          driver.walletBalance < 0
+                            ? 'text-red-700 bg-red-50 hover:bg-red-100 border-red-200'
+                            : 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border-emerald-200'
+                        }`}
+                        title={
+                          driver.walletBalance < 0
+                            ? `Driver owes ₹${Math.abs(driver.walletBalance).toFixed(2)} — manage wallet`
+                            : 'Manage Driver Wallet'
+                        }
                       >
-                        <Wallet size={11} className="text-emerald-600" />
-                        ₹{Number(driver.wallet_balance ?? driver.wallet?.balance ?? 0).toFixed(2)}
+                        <Wallet
+                          size={11}
+                          className={driver.walletBalance < 0 ? 'text-red-600' : 'text-emerald-600'}
+                        />
+                        {driver.walletBalance < 0 ? '-' : ''}₹{Math.abs(driver.walletBalance).toFixed(2)}
                       </button>
                     </td>
                     <td className="px-3 py-1.5 text-right">
