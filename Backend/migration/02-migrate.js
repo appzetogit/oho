@@ -495,6 +495,22 @@ const driverPhoneOf = (d) =>
   normPhone(d.mobile) || normPhone((usersById.get(String(d.user_id)) || {}).mobile);
 const { winnerOf: driverWinner, merged: driversMerged } = pickWinners(rawDrivers, driverPhoneOf);
 
+// A merged duplicate's wallet has to be added to the survivor's, not dropped:
+// it is the same person, and the balance is real money either way (a negative
+// balance is cash they still owe). Summed per surviving account here so the
+// migrated total matches MySQL exactly.
+const walletByWinner = new Map();
+for (const d of rawDrivers) {
+  const winner = driverWinner.get(String(d.id));
+  if (!winner) continue;
+  const w = dWalletByDriver.get(String(d.id)) || {};
+  const acc = walletByWinner.get(winner) || { balance: 0, totalAdded: 0, totalSpent: 0 };
+  acc.balance += num(w.amount_balance);
+  acc.totalAdded += num(w.amount_added);
+  acc.totalSpent += num(w.amount_spent);
+  walletByWinner.set(winner, acc);
+}
+
 const drivers = [];
 let dSkipped = 0;
 
@@ -519,7 +535,7 @@ for (const d of rawDrivers) {
   const _id = map.driver.get(id) || oid();
   map.driver.set(id, _id);
 
-  const wallet = dWalletByDriver.get(id) || {};
+  const wallet = walletByWinner.get(id) || { balance: 0, totalAdded: 0, totalSpent: 0 };
   const legacyVt = vtByDriver.get(id) || String(d.vehicle_type || '');
   const lat = num(u.current_lat, null);
   const lng = num(u.current_lng, null);
@@ -557,9 +573,9 @@ for (const d of rawDrivers) {
     totalRatingScore: num(u.rating_total),
 
     wallet: {
-      balance: num(wallet.amount_balance),
-      totalAdded: num(wallet.amount_added),
-      totalSpent: num(wallet.amount_spent),
+      balance: wallet.balance,
+      totalAdded: wallet.totalAdded,
+      totalSpent: wallet.totalSpent,
     },
     bankDetails: bankByDriver.get(id) || {},
     documents: (docsByDriver.get(id) || []).map((doc) => ({
