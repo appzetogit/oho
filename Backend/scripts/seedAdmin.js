@@ -23,9 +23,11 @@ if (!MONGO_URI) {
 }
 
 // ── Admin credentials ────────────────────────────────────────────────────────
-const ADMIN_EMAIL = 'admin@admin.com';
-const ADMIN_PASS  = '123456';
-const ADMIN_NAME  = 'Super Admin';
+// Real credentials come from the environment so they never land in the repo:
+//   ADMIN_EMAIL=... ADMIN_PASSWORD=... node scripts/seedAdmin.js
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@admin.com';
+const ADMIN_PASS  = process.env.ADMIN_PASSWORD || '123456';
+const ADMIN_NAME  = process.env.ADMIN_NAME || 'Super Admin';
 
 // ── Mongoose schema (mirrors Admin.js) ───────────────────────────────────────
 const adminSchema = new mongoose.Schema(
@@ -70,7 +72,7 @@ const Admin = mongoose.models.TaxiAdmin || mongoose.model('TaxiAdmin', adminSche
     }
 
     console.log(`\n  Email   : ${ADMIN_EMAIL}`);
-    console.log(`  Password: ${ADMIN_PASS}`);
+    console.log(`  Password: (the one supplied via ADMIN_PASSWORD)`);
     console.log(`  Role    : admin\n`);
   } catch (err) {
     console.error('❌  Seed failed:', err.message);
