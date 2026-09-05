@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronRight, Bus, ArrowUpRight, Loader2, Save } from 'lucide-react';
+import { ChevronRight, Bus, Camera, ArrowUpRight, Loader2, Save } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../../../shared/api/axiosInstance';
 
@@ -11,42 +11,80 @@ const SectionHeader = ({ title }) => (
   </div>
 );
 
+const Toggle = ({ checked, onChange, label }) => (
+  <button
+    type="button"
+    role="switch"
+    aria-checked={checked}
+    aria-label={label}
+    onClick={onChange}
+    className={`w-12 h-6 rounded-full relative transition-colors duration-300 shrink-0 focus:outline-none focus:ring-2 focus:ring-yellow-400 focus:ring-offset-2 ${
+      checked ? 'bg-yellow-400' : 'bg-gray-300'
+    }`}
+  >
+    <div
+      className={`w-4 h-4 bg-white rounded-full absolute top-1 shadow-sm transition-all duration-300 ${
+        checked ? 'left-7' : 'left-1'
+      }`}
+    />
+  </button>
+);
+
+// The panel persists these as the strings '1'/'0', but older documents may hold
+// real booleans, so read both.
+const isOn = (value) => value === '1' || value === 1 || value === true;
+
 const CustomizationSettings = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [busServiceEnabled, setBusServiceEnabled] = useState(false);
+  // Defaults to on so a failed load never renders as "selfie not required",
+  // which would misreport a safety check as disabled.
+  const [driverSelfieEnabled, setDriverSelfieEnabled] = useState(true);
 
   useEffect(() => {
-    const fetchBusSettings = async () => {
+    const fetchSettings = async () => {
       try {
         setLoading(true);
-        const response = await api.get('/admin/general-settings/transport-ride');
-        const enabled = response.data?.settings?.enable_bus_service;
-        setBusServiceEnabled(enabled === '1' || enabled === 1 || enabled === true);
+        const [transportRes, customizeRes] = await Promise.all([
+          api.get('/admin/general-settings/transport-ride'),
+          api.get('/admin/general-settings/customize'),
+        ]);
+        setBusServiceEnabled(isOn(transportRes.data?.settings?.enable_bus_service));
+
+        // Absent on installs predating this setting; treat as on, matching the
+        // server-side default.
+        const selfie = customizeRes.data?.settings?.enable_driver_online_selfie;
+        setDriverSelfieEnabled(selfie === undefined || selfie === null || selfie === '' ? true : isOn(selfie));
       } catch (error) {
-        console.error('Failed to load bus service settings:', error);
-        toast.error('Failed to load bus service setting');
+        console.error('Failed to load customization settings:', error);
+        toast.error('Failed to load customization settings');
       } finally {
         setLoading(false);
       }
     };
 
-    fetchBusSettings();
+    fetchSettings();
   }, []);
 
   const handleSave = async () => {
     try {
       setSaving(true);
-      await api.patch('/admin/general-settings/transport-ride', {
-        settings: {
-          enable_bus_service: busServiceEnabled ? '1' : '0',
-        },
-      });
-      toast.success('Bus service setting updated successfully');
+      // Each category is patched separately; the server shallow-merges, so the
+      // other keys in each category are left alone.
+      await Promise.all([
+        api.patch('/admin/general-settings/transport-ride', {
+          settings: { enable_bus_service: busServiceEnabled ? '1' : '0' },
+        }),
+        api.patch('/admin/general-settings/customize', {
+          settings: { enable_driver_online_selfie: driverSelfieEnabled ? '1' : '0' },
+        }),
+      ]);
+      toast.success('Customization settings updated successfully');
     } catch (error) {
-      console.error('Failed to save bus service setting:', error);
-      toast.error('Failed to save bus service setting');
+      console.error('Failed to save customization settings:', error);
+      toast.error('Failed to save customization settings');
     } finally {
       setSaving(false);
     }
@@ -57,7 +95,7 @@ const CustomizationSettings = () => {
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="flex flex-col items-center gap-4">
           <Loader2 className="w-10 h-10 text-yellow-500 animate-spin" />
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest">Loading bus service...</p>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest">Loading settings...</p>
         </div>
       </div>
     );
@@ -68,9 +106,9 @@ const CustomizationSettings = () => {
       <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-700">
         <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-end gap-4">
           <div className="flex items-center gap-1.5 text-xs font-medium text-gray-500">
-            <span>Customization Settings</span>
+            <span>Settings</span>
             <ChevronRight size={14} />
-            <span className="text-gray-900">Bus Service</span>
+            <span className="text-gray-900">Customization</span>
           </div>
         </div>
 
@@ -99,20 +137,43 @@ const CustomizationSettings = () => {
                 </div>
               </div>
 
-              <button
-                type="button"
-                aria-pressed={busServiceEnabled}
-                onClick={() => setBusServiceEnabled((prev) => !prev)}
-                className={`w-12 h-6 rounded-full relative transition-colors duration-300 shrink-0 focus:outline-none ${
-                  busServiceEnabled ? 'bg-yellow-400' : 'bg-gray-300'
-                }`}
-              >
-                <div
-                  className={`w-4 h-4 bg-white rounded-full absolute top-1 shadow-sm transition-all duration-300 ${
-                    busServiceEnabled ? 'left-7' : 'left-1'
-                  }`}
-                />
-              </button>
+              <Toggle
+                checked={busServiceEnabled}
+                onChange={() => setBusServiceEnabled((prev) => !prev)}
+                label="Enable bus service"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          <SectionHeader title="Driver Verification" />
+
+          <div className="p-6">
+            <div className="rounded-xl border border-gray-200 bg-gray-50/50 p-6 flex flex-col sm:flex-row items-start justify-between gap-6">
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 rounded-xl bg-yellow-50 text-yellow-600 border border-yellow-100 flex items-center justify-center shadow-sm shrink-0">
+                  <Camera size={22} />
+                </div>
+                <div>
+                  <h4 className="text-sm font-semibold text-gray-900">Online Selfie</h4>
+                  <p className="mt-1 text-sm text-gray-500">
+                    Require drivers to capture a selfie once a day before they can go online.
+                    Turn this off and drivers go online straight away.
+                  </p>
+                  {!driverSelfieEnabled && (
+                    <p className="mt-3 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                      Drivers will go online without any identity check.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <Toggle
+                checked={driverSelfieEnabled}
+                onChange={() => setDriverSelfieEnabled((prev) => !prev)}
+                label="Require a daily selfie before a driver goes online"
+              />
             </div>
 
             <div className="mt-8 flex justify-end pt-6 border-t border-gray-100">
@@ -123,7 +184,7 @@ const CustomizationSettings = () => {
                 className="bg-yellow-400 text-black px-8 py-2.5 rounded-lg text-sm font-semibold shadow-sm flex items-center justify-center gap-2 hover:bg-yellow-500 active:scale-95 transition-all disabled:opacity-50"
               >
                 {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
-                {saving ? 'Saving Changes...' : 'Save Bus Service Setting'}
+                {saving ? 'Saving Changes...' : 'Save Settings'}
               </button>
             </div>
           </div>

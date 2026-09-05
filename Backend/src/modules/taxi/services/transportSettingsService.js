@@ -4,7 +4,10 @@ import { getOrLoadCachedValue } from '../../../utils/cache.js';
 
 const defaultTransportRideSettings = createDefaultBusinessSettings().transport_ride || {};
 const defaultBidRideSettings = createDefaultBusinessSettings().bid_ride || {};
+const defaultCustomizationSettings = createDefaultBusinessSettings().customization || {};
 const SETTINGS_CACHE_TTL_MS = 30_000;
+
+export const CUSTOMIZATION_SETTINGS_CACHE_KEY = 'cache:settings:customization';
 
 const toPositiveNumber = (value, fallback) => {
   const numericValue = Number(value);
@@ -46,6 +49,50 @@ export const getBidRideSettings = async () => {
         };
       },
     },
+  );
+};
+
+export const getCustomizationSettings = async () => {
+  return getOrLoadCachedValue(
+    CUSTOMIZATION_SETTINGS_CACHE_KEY,
+    {
+      ttlMs: SETTINGS_CACHE_TTL_MS,
+      load: async () => {
+        const businessSettings = await AdminBusinessSetting.findOne({ scope: 'default' })
+          .select('customization')
+          .lean();
+
+        return {
+          ...defaultCustomizationSettings,
+          ...(businessSettings?.customization || {}),
+        };
+      },
+    },
+  );
+};
+
+/**
+ * Admin toggles arrive as the strings '1'/'0' (the panel posts them that way),
+ * but older documents may hold real booleans, so accept both. Anything absent
+ * falls back to the default rather than reading as "off", which would silently
+ * drop a safety check on installs that predate the setting.
+ */
+const isSettingEnabled = (value, fallback) => {
+  if (value === undefined || value === null || value === '') {
+    return fallback;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  return !['0', 'false', 'off', 'no'].includes(normalized);
+};
+
+/**
+ * Whether a driver must capture a daily selfie before going online.
+ */
+export const isDriverOnlineSelfieRequired = async () => {
+  const settings = await getCustomizationSettings();
+  return isSettingEnabled(
+    settings.enable_driver_online_selfie,
+    isSettingEnabled(defaultCustomizationSettings.enable_driver_online_selfie, true),
   );
 };
 

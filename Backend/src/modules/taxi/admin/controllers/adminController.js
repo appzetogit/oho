@@ -7,6 +7,7 @@ import { BusService } from '../models/BusService.js';
 import { BusSeatHold } from '../../user/models/BusSeatHold.js';
 import { getPublicActivePaymentGateway } from '../../services/paymentGatewayService.js';
 import { getOrLoadCachedValue, invalidateCachedPrefix, invalidateCachedValue } from '../../../../utils/cache.js';
+import { CUSTOMIZATION_SETTINGS_CACHE_KEY } from '../../services/transportSettingsService.js';
 import { getMailConfigStatus, sendEmail } from '../../services/mailService.js';
 // Used ~40 times below but never imported: those paths threw ReferenceError
 // instead of the intended 4xx.
@@ -30,6 +31,10 @@ const invalidatePublicConfigCaches = async () => {
     invalidateCachedPrefix(APP_MODULES_CACHE_PREFIX),
     invalidateCachedPrefix(GENERAL_SETTINGS_CACHE_PREFIX),
     invalidateCachedValue(APP_BOOTSTRAP_CACHE_KEY),
+    // The server reads customization toggles through its own cache, so clear
+    // that too — otherwise flipping a toggle like the driver online selfie
+    // appears saved in the panel but keeps enforcing the old value for 30s.
+    invalidateCachedValue(CUSTOMIZATION_SETTINGS_CACHE_KEY),
   ]);
 };
 

@@ -628,6 +628,15 @@ const DriverHome = () => {
     const { settings } = useSettings();
     const appName = settings.general?.app_name || 'App';
     const appLogo = settings.general?.logo || settings.customization?.logo;
+    // Admin toggle. Absent (settings not loaded yet, or an install predating
+    // the setting) means required, matching the server default — better to ask
+    // for a selfie that turns out to be optional than to skip a required one
+    // and have the server reject going online.
+    const onlineSelfieRequired = useMemo(() => {
+        const value = settings.customization?.enable_driver_online_selfie;
+        if (value === undefined || value === null || value === '') return true;
+        return !['0', 'false', 'off', 'no'].includes(String(value).trim().toLowerCase());
+    }, [settings.customization?.enable_driver_online_selfie]);
     const storedDriverInfo = useMemo(() => readStoredDriverInfo(), []);
     const [isOwnerManagedDriver, setIsOwnerManagedDriver] = useState(() => isOwnerManagedDriverProfile(storedDriverInfo));
     const [isOnline, setIsOnline] = useState(false);
@@ -1446,7 +1455,9 @@ const DriverHome = () => {
             return;
         }
 
-        if (hasSelfieForToday(onlineSelfie)) {
+        // The server enforces this too; skipping the prompt here just avoids
+        // asking for something it would no longer require.
+        if (!onlineSelfieRequired || hasSelfieForToday(onlineSelfie)) {
             goOnline();
             return;
         }
@@ -1461,6 +1472,7 @@ const DriverHome = () => {
         isOnline,
         isTogglingDuty,
         onlineSelfie,
+        onlineSelfieRequired,
         rejectedDocumentNotes,
         stopSelfieCameraStream,
         vehicleReapprovalPending,

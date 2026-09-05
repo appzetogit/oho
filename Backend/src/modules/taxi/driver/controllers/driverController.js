@@ -25,6 +25,7 @@ import { RentalVehicleType } from "../../admin/models/RentalVehicleType.js";
 import { RentalBookingRequest } from "../../admin/models/RentalBookingRequest.js";
 import { CustomerBiometricProfile } from "../../admin/models/CustomerBiometricProfile.js";
 import { AdminBusinessSetting } from "../../admin/models/AdminBusinessSetting.js";
+import { isDriverOnlineSelfieRequired } from "../../services/transportSettingsService.js";
 import { Notification } from "../../admin/promotions/models/Notification.js";
 import { FleetVehicle } from "../../admin/models/FleetVehicle.js";
 import { Zone } from "../models/Zone.js";
@@ -2856,7 +2857,12 @@ export const goOnline = async (req, res) => {
     String(existingDriver.onlineSelfie?.forDate || "") === todayKey &&
     String(existingDriver.onlineSelfie?.imageUrl || "").trim();
 
-  if (!hasTodaySelfie && !String(selfieImageUrl || "").trim()) {
+  // Admin-configurable: with the toggle off, drivers go online without one. A
+  // selfie sent anyway is still stored, so turning the toggle back on does not
+  // lose whatever was captured while it was off.
+  const selfieRequired = await isDriverOnlineSelfieRequired();
+
+  if (selfieRequired && !hasTodaySelfie && !String(selfieImageUrl || "").trim()) {
     throw new ApiError(400, "A selfie is required before going online today");
   }
 
@@ -2871,15 +2877,17 @@ export const goOnline = async (req, res) => {
   );
   const nextTodaySummary = buildDriverTodaySummaryFromDocument(existingDriver);
 
-  const nextOnlineSelfie =
-    hasTodaySelfie && !String(selfieImageUrl || "").trim()
-      ? existingDriver.onlineSelfie
-      : {
-          imageUrl: String(selfieImageUrl || "").trim(),
-          capturedAt: new Date(),
-          uploadedAt: new Date(),
-          forDate: todayKey,
-        };
+  // Only stamp a new record when a selfie was actually supplied. Writing one
+  // regardless would, with the toggle off, save an empty imageUrl dated today —
+  // a record claiming a capture that never happened.
+  const nextOnlineSelfie = String(selfieImageUrl || "").trim()
+    ? {
+        imageUrl: String(selfieImageUrl).trim(),
+        capturedAt: new Date(),
+        uploadedAt: new Date(),
+        forDate: todayKey,
+      }
+    : existingDriver.onlineSelfie;
 
   const driver = await Driver.findByIdAndUpdate(
     req.auth.sub,
