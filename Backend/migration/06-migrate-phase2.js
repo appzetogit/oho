@@ -134,7 +134,12 @@ const setPrices = load('zone_types').map((zt) => {
     vehicle_type: vehicles.get(String(zt.type_id)) || null,
     transport_type: str(zt.transport_type, 'taxi').toLowerCase(),
     pricing_scope: 'zone',
-    payment_type: str(zt.payment_type),
+    // SetPrice.js declares payment_type as [String]; the source stores it as a
+    // comma-joined string.
+    payment_type: str(zt.payment_type)
+      .split(',')
+      .map((x) => x.trim().toLowerCase())
+      .filter(Boolean),
 
     base_price: num(p.base_price),
     base_distance: num(p.base_distance),
@@ -160,7 +165,11 @@ const setPrices = load('zone_types').map((zt) => {
     customer_commission: num(zt.admin_commision),
     customer_commission_type: str(zt.admin_commision_type),
 
-    active: bool(zt.active),
+    // resolveSetPriceForRide filters on `active: 1` and `status: 'active'`.
+    // Storing a boolean here (and omitting status) left every migrated pricing
+    // row in the database but invisible to the fare engine.
+    active: bool(zt.active) ? 1 : 0,
+    status: bool(zt.active) ? 'active' : 'inactive',
     createdAt: date(zt.created_at) || new Date(),
     updatedAt: date(zt.updated_at) || new Date(),
   };
@@ -324,8 +333,8 @@ const goods = load('goods_types').map((g) => ({
   translation_dataset: str(g.translation_dataset),
   goods_types_for: str(g.goods_types_for),
   company_key: str(g.company_key),
-  active: bool(g.active),
-  status: bool(g.active) ? 1 : 0,
+  active: bool(g.active) ? 1 : 0,
+  status: bool(g.active) ? 'active' : 'inactive',
   createdAt: date(g.created_at) || new Date(),
   updatedAt: date(g.updated_at) || new Date(),
 }));
@@ -405,7 +414,7 @@ const packages = load('package_types').map((p) => ({
   description: str(p.description),
   transport_type: str(p.transport_type, 'taxi').toLowerCase(),
   active: bool(p.active),
-  status: bool(p.active) ? 1 : 0,
+  status: bool(p.active) ? 'active' : 'inactive',
   createdAt: date(p.created_at) || new Date(),
   updatedAt: date(p.updated_at) || new Date(),
 }));

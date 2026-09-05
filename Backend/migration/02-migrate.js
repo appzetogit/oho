@@ -236,6 +236,7 @@ const locations = load('service_locations').map((r) => {
     currency_symbol: str(r.currency_symbol, '₹'),
     timezone: str(r.timezone, 'Asia/Kolkata'),
     active: bool(r.active),
+    status: bool(r.active) ? 'active' : 'inactive',
     createdAt: date(r.created_at) || new Date(),
     updatedAt: date(r.updated_at) || new Date(),
   };
@@ -255,9 +256,13 @@ const vehicles = load('vehicle_types').map((r) => {
     capacity: num(r.capacity, 4),
     transport_type: str(r.trip_dispatch_type).toUpperCase() === 'DELIVERY' ? 'delivery' : 'taxi',
     icon: str(r.icon),
+    // Vehicle.js declares active:Boolean but status and is_accept_share_ride as
+    // Number(0|1). Writing through the native driver skips Mongoose casting, so
+    // these have to match the schema exactly or queries filtering on them miss
+    // the row entirely.
     active: bool(r.active),
-    status: bool(r.active) ? 'active' : 'inactive',
-    is_accept_share_ride: bool(r.is_accept_share_ride),
+    status: bool(r.active) ? 1 : 0,
+    is_accept_share_ride: bool(r.is_accept_share_ride) ? 1 : 0,
     createdAt: date(r.created_at) || new Date(),
     updatedAt: date(r.updated_at) || new Date(),
   };
@@ -452,6 +457,10 @@ for (const o of rawOwners) {
     account_no: str(o.account_no),
     active: bool(o.active),
     approve: bool(o.approve),
+    // Mirrors the app's own rule (owner.approve ? 'approved' : 'pending'); the
+    // schema default of 'pending' would otherwise mark every migrated owner as
+    // awaiting approval.
+    status: bool(o.approve) ? 'approved' : 'pending',
     deletedAt: date(o.deleted_at),
     createdAt: date(o.created_at) || new Date(),
     updatedAt: date(o.updated_at) || new Date(),
