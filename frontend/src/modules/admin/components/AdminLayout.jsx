@@ -864,6 +864,10 @@ const AdminLayout = () => {
               { label: 'Hike Slots', path: '/admin/pricing/price-hike', permission: 'set_prices.view' },
             ],
           },
+          // Rental and Bus Service are hidden from the sidebar for now. Only the
+          // nav entries are commented out — the routes, pages and APIs are all
+          // still in place, so uncommenting these two blocks brings them back.
+          /*
           {
             icon: Briefcase,
             label: 'Rental',
@@ -890,6 +894,7 @@ const AdminLayout = () => {
               { label: 'Bus Bookings', path: '/admin/bus-service/bookings', permission: 'bus_service.view' },
             ],
           },
+          */
           {
             icon: Share2,
             label: 'Car Pooling',
