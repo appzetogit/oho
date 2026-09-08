@@ -218,60 +218,40 @@ const MainDashboard = () => {
           </div>
         )}
 
-        {/* 1. LIVE PLATFORM OVERVIEW (10 KPI Cards) */}
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        {/* 1. LIVE PLATFORM OVERVIEW (8 KPI cards) */}
+        {/* Four across so the eight cards fill two even rows. */}
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-4">
           {/*
-            `to` sends the card to the page showing the records behind the
-            number. Cards without a `to` are not clickable on purpose: "Online
-            Customers" and "Platform Uptime" are placeholders, not measurements,
-            so there is nothing to drill into.
+            Every card is a real figure that opens the page listing the records
+            behind it. Nothing here is a placeholder — if a number cannot be
+            measured and drilled into, it does not belong on this row.
           */}
           {[
             { label: "Total Customers", value: totalUsers, icon: Users, cardBg: "!bg-violet-500", to: "/admin/users" },
             { label: "Total Drivers", value: totalDrivers, icon: Car, cardBg: "!bg-sky-500", to: "/admin/drivers" },
             { label: "Active Drivers", value: approvedDrivers, icon: UserCheck, cardBg: "!bg-emerald-500", to: "/admin/drivers" },
             { label: "Active Vendors", value: totalOwners, icon: Building2, cardBg: "!bg-rose-500", to: "/admin/owners" },
-            { label: "Online Customers", value: Math.max(1, Math.round(totalUsers * 0.15)), icon: Sparkles, cardBg: "!bg-orange-500" },
             { label: "Ongoing Trips", value: todayTrips.scheduled || 0, icon: Activity, cardBg: "!bg-blue-500", to: "/admin/ongoing" },
             { label: "Today's Revenue", value: `₹${currency(todayEarnings.total)}`, icon: IndianRupee, cardBg: "!bg-emerald-500", to: "/admin/earnings" },
-            { label: "Platform Uptime", value: "99.98%", icon: Server, cardBg: "!bg-violet-500" },
             { label: "Fleet Utilization", value: `${fleetUtilization}%`, icon: TrendingUp, cardBg: "!bg-teal-500", to: "/admin/drivers/active" },
             { label: "Pending Approvals", value: declinedDrivers, icon: Clock, cardBg: "!bg-red-500", to: "/admin/drivers/pending" }
-          ].map((kpi, idx) => {
-            const body = (
-              <>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="card-label text-[10px] font-bold opacity-80 uppercase tracking-wider">{kpi.label}</span>
-                  <div className="p-2 rounded-full bg-white/20 backdrop-blur-sm">
-                    <kpi.icon size={16} strokeWidth={2.5} />
-                  </div>
+          ].map((kpi, idx) => (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => navigate(kpi.to)}
+              aria-label={`${kpi.label} — open details`}
+              className={`admin-card !p-4 border-none !text-white transition-transform shadow-lg text-left w-full cursor-pointer hover:scale-[1.03] active:scale-[0.99] focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 ${kpi.cardBg}`}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <span className="card-label text-[10px] font-bold opacity-80 uppercase tracking-wider">{kpi.label}</span>
+                <div className="p-2 rounded-full bg-white/20 backdrop-blur-sm">
+                  <kpi.icon size={16} strokeWidth={2.5} />
                 </div>
-                <h4 className="text-xl font-black tracking-tight mt-1">{isLoading ? '...' : kpi.value}</h4>
-              </>
-            );
-
-            const base = `admin-card !p-4 border-none !text-white transition-transform shadow-lg ${kpi.cardBg}`;
-
-            if (!kpi.to) {
-              return (
-                <div key={idx} className={`${base} hover:scale-[1.02]`}>
-                  {body}
-                </div>
-              );
-            }
-
-            return (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => navigate(kpi.to)}
-                aria-label={`${kpi.label} — open details`}
-                className={`${base} text-left w-full cursor-pointer hover:scale-[1.03] active:scale-[0.99] focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2`}
-              >
-                {body}
-              </button>
-            );
-          })}
+              </div>
+              <h4 className="text-xl font-black tracking-tight mt-1">{isLoading ? '...' : kpi.value}</h4>
+            </button>
+          ))}
         </div>
 
         {/* REVENUE & BOOKING ANALYTICS ROW */}
