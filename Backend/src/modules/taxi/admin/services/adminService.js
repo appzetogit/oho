@@ -8243,11 +8243,14 @@ export const getDashboardData = async () => {
     return dashboardCache.value;
   }
 
+  // Soft-deleted records are excluded here to match the list pages, which all
+  // filter on deletedAt. Without this the dashboard counted 14 deleted drivers,
+  // so "Pending Approvals" read 76 while the page it links to listed 62.
   const [totalUsers, totalDrivers, totalOwners, approvedDrivers, rides, supportTicketStats] = await Promise.all([
-    User.countDocuments(),
-    Driver.countDocuments(),
-    Owner.countDocuments(),
-    Driver.countDocuments({ approve: true }),
+    User.countDocuments({ deletedAt: null }),
+    Driver.countDocuments({ deletedAt: null }),
+    Owner.countDocuments({ deletedAt: null }),
+    Driver.countDocuments({ approve: true, deletedAt: null }),
     Ride.find()
       .select('status liveStatus fare paymentMethod commissionAmount driverEarnings driverId createdAt updatedAt completedAt')
       .sort({ createdAt: -1 })
