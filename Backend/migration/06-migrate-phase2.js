@@ -9,6 +9,9 @@
  * Depends on phase 1 having run: legacy ids are resolved by reading back the
  * `legacyId` already stored on the migrated users, drivers, owners and rides.
  *
+ * Re-running this overwrites the pricing rows from MySQL, so any rate edited
+ * since in Price Management will be reverted. Re-run only for a fresh import.
+ *
  * Foreign keys in the source are not always what their name suggests. Verified
  * against the export before writing any of this:
  *   owner_wallets.user_id  -> owners.id   (NOT users.id)
@@ -125,6 +128,23 @@ for (const d of rawDrivers) {
 // ═══ 1. Zone pricing ═════════════════════════════════════════════════════════
 note('── 1. Zone pricing ──');
 
+/**
+ * A money rate is never legitimately negative — the source had Bike at -15/km,
+ * which computes to a fare that shrinks with distance and goes negative past a
+ * few kilometres. The admin API already clamps these fields with Math.max(0),
+ * so this only got in because the migration writes through the native driver
+ * and skips that. Clamp and shout rather than importing a value the app itself
+ * would reject.
+ */
+const rate = (value, legacyId, field) => {
+  const n = num(value);
+  if (n < 0) {
+    warn(`zone_type ${legacyId}: ${field} was ${n} in MySQL — clamped to 0, set a real rate in Price Management`);
+    return 0;
+  }
+  return n;
+};
+
 const priceByZoneType = new Map(load('zone_type_price').map((p) => [String(p.zone_type_id), p]));
 const setPrices = load('zone_types').map((zt) => {
   const p = priceByZoneType.get(String(zt.id)) || {};
@@ -141,17 +161,17 @@ const setPrices = load('zone_types').map((zt) => {
       .map((x) => x.trim().toLowerCase())
       .filter(Boolean),
 
-    base_price: num(p.base_price),
-    base_distance: num(p.base_distance),
-    price_per_distance: num(p.price_per_distance),
-    time_price: num(p.price_per_time),
-    waiting_charge: num(p.waiting_charge),
+    base_price: rate(p.base_price, zt.id, 'base_price'),
+    base_distance: rate(p.base_distance, zt.id, 'base_distance'),
+    price_per_distance: rate(p.price_per_distance, zt.id, 'price_per_distance'),
+    time_price: rate(p.price_per_time, zt.id, 'time_price'),
+    waiting_charge: rate(p.waiting_charge, zt.id, 'waiting_charge'),
     free_waiting_before: num(p.free_waiting_time_in_mins_before_trip_start),
 
-    outstation_base_price: num(p.outstation_base_price),
-    outstation_base_distance: num(p.outstation_base_distance),
-    outstation_price_per_distance: num(p.outstation_price_per_distance),
-    outstation_time_price: num(p.outstation_price_per_time),
+    outstation_base_price: rate(p.outstation_base_price, zt.id, 'outstation_base_price'),
+    outstation_base_distance: rate(p.outstation_base_distance, zt.id, 'outstation_base_distance'),
+    outstation_price_per_distance: rate(p.outstation_price_per_distance, zt.id, 'outstation_price_per_distance'),
+    outstation_time_price: rate(p.outstation_price_per_time, zt.id, 'outstation_time_price'),
 
     user_cancellation_fee: num(p.cancellation_fee_for_user) || num(p.cancellation_fee),
     driver_cancellation_fee: num(p.cancellation_fee_for_driver),
