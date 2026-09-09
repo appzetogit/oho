@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { ApiError } from '../../../../utils/ApiError.js';
+import { CancellationReason } from '../../admin/models/CancellationReason.js';
 import { normalizePoint } from '../../../../utils/geo.js';
 import { resolveConfiguredGatewayCredentials } from '../../services/paymentGatewayService.js';
 import { Driver } from '../../driver/models/Driver.js';
@@ -980,9 +981,32 @@ export const getRideAppTipSettings = async (_req, res) => {
 };
 
 export const cancelRide = async (req, res) => {
+  const { reasonId, note } = req.body || {};
+
+  // The label is taken from the catalog rather than the request body, so what
+  // is stored is a reason the admin actually offers and cannot be spoofed into
+  // the ride record. An unrecognised id is ignored instead of rejected — a
+  // rider must always be able to cancel.
+  let reason = '';
+  let resolvedReasonId = null;
+  if (reasonId && mongoose.isValidObjectId(reasonId)) {
+    const catalogEntry = await CancellationReason.findOne({
+      _id: reasonId,
+      audience: 'user',
+      active: true,
+    }).lean();
+    if (catalogEntry) {
+      reason = catalogEntry.title;
+      resolvedReasonId = catalogEntry._id;
+    }
+  }
+
   const ride = await cancelRideByUser({
     rideId: req.params.rideId,
     userId: req.auth.sub,
+    reason,
+    reasonId: resolvedReasonId,
+    note: String(note || '').slice(0, 500),
   });
 
   if (!ride) {

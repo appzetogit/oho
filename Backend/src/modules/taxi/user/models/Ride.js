@@ -604,6 +604,37 @@ const rideSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // The other lifecycle timestamps were declared but this one was not, so
+    // every cancellation time written to it — including the migrated ones — was
+    // silently dropped by strict mode.
+    cancelledAt: {
+      type: Date,
+      default: null,
+    },
+    // Why the ride was cancelled. The label is stored alongside the id so the
+    // record still reads correctly if the reason is later reworded or removed
+    // from the catalog. Migrated rides carry the label only.
+    cancellationReason: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    cancellationReasonId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'TaxiCancellationReason',
+      default: null,
+    },
+    // Free text for the catch-all reason, which is otherwise unactionable.
+    cancellationNote: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    cancelledBy: {
+      type: String,
+      enum: ['user', 'driver', 'admin', 'system', ''],
+      default: '',
+    },
     // What was actually charged for this cancellation. SetPrice holds the rate;
     // this records the fee that was levied on a particular ride.
     cancellationFee: {
