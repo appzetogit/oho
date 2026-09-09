@@ -42,6 +42,7 @@ import SuvIcon from '@/assets/icons/SUV.png';
 import BikeIcon from '@/assets/icons/bike.png';
 import CarIcon from '@/assets/icons/car.png';
 import AutoIcon from '@/assets/icons/auto.png';
+import { useCancellationReasons } from '@/shared/hooks/useCancellationReasons';
 
 const getVehicleIcon = (type = 'car') => {
   const val = String(type).toLowerCase();
@@ -216,6 +217,12 @@ const SearchingDriver = () => {
   const routeState = useMemo(() => location.state || {}, [location.state]);
   const [stage, setStage] = useState(STAGES.SEARCHING);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [cancelReasonId, setCancelReasonId] = useState('');
+  const [cancelNote, setCancelNote] = useState('');
+  // Only fetched once the rider opens the dialog — no point loading a list most
+  // rides never show.
+  const { reasons: cancelReasons } = useCancellationReasons('user', { enabled: showCancelConfirm });
+  const selectedCancelReason = cancelReasons.find((r) => String(r.id || r._id) === cancelReasonId) || null;
   const [driver, setDriver] = useState(DRIVER_PLACEHOLDER);
   const [rideOtp, setRideOtp] = useState('');
   const [searchStatus, setSearchStatus] = useState('Connecting with drivers nearby');
@@ -828,14 +835,22 @@ const SearchingDriver = () => {
 
     try {
       if (rideId) {
-        await api.patch(`/rides/${rideId}/cancel`);
+        // The server resolves the label from the id, so only the id and any
+        // free text are worth sending.
+        // The note belongs only to a reason that asks for one; without this a
+        // rider who types under "Other" then switches would send it anyway.
+        const note = selectedCancelReason?.requiresNote ? cancelNote.trim() : '';
+        await api.patch(`/rides/${rideId}/cancel`, {
+          ...(cancelReasonId ? { reasonId: cancelReasonId } : {}),
+          ...(note ? { note } : {}),
+        });
       }
     } catch (_error) {
       // Navigation still proceeds even if the cancel request races with another state update.
     }
 
     navigate(userHomeRoute, { replace: true });
-  }, [navigate, userHomeRoute]);
+  }, [navigate, userHomeRoute, cancelReasonId, cancelNote, selectedCancelReason]);
 
   useEffect(() => {
     if (!isSearching || trackingStartedRef.current) {
@@ -1387,9 +1402,51 @@ const SearchingDriver = () => {
                 <AlertTriangle size={26} className="text-red-400" strokeWidth={2} />
               </div>
               <h3 className="text-[18px] font-bold text-slate-900 mb-1.5">Cancel ride?</h3>
-              <p className="text-[13px] font-bold text-slate-400 mb-6 leading-relaxed">
-                {"We're still searching. Stop looking?"}
+              <p className="text-[13px] font-bold text-slate-400 mb-4 leading-relaxed">
+                {cancelReasons.length ? 'Tell us why, so we can improve.' : "We're still searching. Stop looking?"}
               </p>
+
+              {cancelReasons.length > 0 && (
+                <div className="mb-5 max-h-52 overflow-y-auto text-left space-y-1.5 -mx-1 px-1">
+                  {cancelReasons.map((r) => {
+                    const id = String(r.id || r._id);
+                    const selected = cancelReasonId === id;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => setCancelReasonId(selected ? '' : id)}
+                        aria-pressed={selected}
+                        className={`w-full flex items-center gap-2.5 rounded-[14px] border px-3.5 py-2.5 text-[13px] font-semibold transition-colors ${
+                          selected
+                            ? 'border-slate-900 bg-slate-900 text-white'
+                            : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                        }`}
+                      >
+                        <span
+                          className={`w-4 h-4 rounded-full border-2 shrink-0 ${
+                            selected ? 'border-white bg-white/30' : 'border-slate-300'
+                          }`}
+                        />
+                        <span className="text-left leading-snug">{r.title}</span>
+                      </button>
+                    );
+                  })}
+
+                  {selectedCancelReason?.requiresNote && (
+                    <textarea
+                      value={cancelNote}
+                      onChange={(e) => setCancelNote(e.target.value)}
+                      maxLength={500}
+                      rows={3}
+                      placeholder="Tell us what happened"
+                      aria-label="Cancellation details"
+                      className="w-full mt-1.5 rounded-[14px] border border-slate-200 px-3.5 py-2.5 text-[13px] font-medium text-slate-700 placeholder:text-slate-300 focus:outline-none focus:border-slate-900 resize-none"
+                    />
+                  )}
+                </div>
+              )}
+
               <div className="space-y-2.5">
                 <motion.button whileTap={{ scale: 0.97 }} onClick={handleCancel}
                   className="w-full bg-slate-900 text-white py-3.5 rounded-[16px] text-[13px] font-bold uppercase tracking-widest">

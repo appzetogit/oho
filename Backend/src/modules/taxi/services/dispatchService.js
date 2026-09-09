@@ -990,7 +990,7 @@ export const cancelRideByAdmin = async (rideId) => {
   return ride;
 };
 
-export const cancelRideByUser = async ({ rideId, userId }) => {
+export const cancelRideByUser = async ({ rideId, userId, reason = '', reasonId = null, note = '' }) => {
   const dispatchState = getDispatchState(rideId);
   stopDispatchFlow(rideId, { releaseLease: false });
 
@@ -1024,7 +1024,17 @@ export const cancelRideByUser = async ({ rideId, userId }) => {
   const cancelUpdate = {
     status: RIDE_STATUS.CANCELLED,
     liveStatus: RIDE_LIVE_STATUS.CANCELLED,
+    cancelledAt: new Date(),
+    cancelledBy: 'user',
   };
+
+  // Recorded only when supplied, so a client that cancels without picking a
+  // reason does not blank one already stored.
+  const trimmedReason = String(reason || '').trim();
+  const trimmedNote = String(note || '').trim();
+  if (trimmedReason) cancelUpdate.cancellationReason = trimmedReason;
+  if (trimmedNote) cancelUpdate.cancellationNote = trimmedNote;
+  if (reasonId) cancelUpdate.cancellationReasonId = reasonId;
   if (existing.bookingMode === 'bidding') {
     cancelUpdate.biddingStatus = 'cancelled';
   }
@@ -1174,7 +1184,17 @@ export const cancelScheduledRideByDriver = async ({ rideId, driverId }) => {
   const cancelUpdate = {
     status: RIDE_STATUS.CANCELLED,
     liveStatus: RIDE_LIVE_STATUS.CANCELLED,
+    cancelledAt: new Date(),
+    cancelledBy: 'user',
   };
+
+  // Recorded only when supplied, so a client that cancels without picking a
+  // reason does not blank one already stored.
+  const trimmedReason = String(reason || '').trim();
+  const trimmedNote = String(note || '').trim();
+  if (trimmedReason) cancelUpdate.cancellationReason = trimmedReason;
+  if (trimmedNote) cancelUpdate.cancellationNote = trimmedNote;
+  if (reasonId) cancelUpdate.cancellationReasonId = reasonId;
   if (existing.bookingMode === 'bidding') {
     cancelUpdate.biddingStatus = 'cancelled';
   }
