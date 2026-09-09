@@ -255,7 +255,17 @@ const vehicles = load('vehicle_types').map((r) => {
     description: str(r.description),
     capacity: num(r.capacity, 4),
     transport_type: str(r.trip_dispatch_type).toUpperCase() === 'DELIVERY' ? 'delivery' : 'taxi',
+    // MySQL stores a bare Laravel filename here. Left as-is on purpose: the
+    // files only become reachable once 03-copy-uploads.sh has run, so
+    // 10-fix-vehicle-icons.js turns these into URLs afterwards and sets
+    // map_icon, which is what the apps actually render on the map.
     icon: str(r.icon),
+    // The source calls this icon_types_for and uses labels the schema enum does
+    // not all share; without the mapping every vehicle falls back to 'car' and
+    // a bike renders as a car.
+    icon_types: ({ motor_bike: 'bike', motorbike: 'bike', bike: 'bike', auto: 'auto', car: 'car', premium: 'premium', suv: 'suv', truck: 'truck' })[
+      str(r.icon_types_for).toLowerCase()
+    ] || 'car',
     // Vehicle.js declares active:Boolean but status and is_accept_share_ride as
     // Number(0|1). Writing through the native driver skips Mongoose casting, so
     // these have to match the schema exactly or queries filtering on them miss
