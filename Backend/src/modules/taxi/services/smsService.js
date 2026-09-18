@@ -3,8 +3,14 @@ import { ApiError } from '../../../utils/ApiError.js';
 import { AdminBusinessSetting } from '../admin/models/AdminBusinessSetting.js';
 
 const SMS_INDIA_HUB_ENDPOINT = 'http://cloud.smsindiahub.in/api/mt/SendSMS';
+// DLT rules: the text must match, word for word, a template registered for
+// the sender ID, with ##var## where the OTP goes. This is OHO's approved
+// template (ID 1077336830028059870, sender OHORID), taken from the old app.
+// SMS India Hub's generic demo template belongs to their sender ID, not ours,
+// and is rejected with "006 Invalid template text".
 const DLT_TEMPLATE_TEXT =
-  'Welcome to the ##var## powered by SMSINDIAHUB. Your OTP for registration is ##var##';
+  process.env.SMS_INDIA_HUB_TEMPLATE_TEXT ||
+  'Your OTP for OHO Ride Login verification is ##var##. This OTP is valid for 10 minutes. Please do not share this OTP with anyone.';
 const DEFAULT_BRAND_NAME = 'App';
 
 const isTruthy = (value) => ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
@@ -63,7 +69,7 @@ const getSmsIndiaHubConfig = () => {
   const templateId = readValue(
     env.sms?.indiaHub?.dltTemplateId,
     process.env.SMS_INDIA_HUB_DLT_TEMPLATE_ID,
-    '1007801291964877107',
+    '1077336830028059870',
   );
 
   return {
@@ -124,8 +130,11 @@ const getConfiguredBrandName = async () => {
   }
 };
 
+// One placeholder means it is the OTP; two means brand name, then OTP.
 const renderOtpMessage = ({ appName, otp }) =>
-  DLT_TEMPLATE_TEXT.replace('##var##', String(appName)).replace('##var##', String(otp));
+  (DLT_TEMPLATE_TEXT.split('##var##').length - 1) >= 2
+    ? DLT_TEMPLATE_TEXT.replace('##var##', String(appName)).replace('##var##', String(otp))
+    : DLT_TEMPLATE_TEXT.replace('##var##', String(otp));
 
 const isSuccessfulProviderResponse = (response, responseText) => {
   const parsed = parseProviderResponse(responseText);
@@ -206,7 +215,16 @@ export const sendOtpSms = async ({ phone, otp, purpose = 'otp' }) => {
 
   const config = getSmsIndiaHubConfig();
   const brandName = await getConfiguredBrandName();
-  const authModes = config.apiKey ? ['apiKey', 'credentials'] : ['credentials'];
+  // Only fall back to username/password when both are set; otherwise the
+  // fallback throws "user is not configured" and hides the provider's real
+  // answer from the API-key attempt.
+  const authModes = [
+    ...(config.apiKey ? ['apiKey'] : []),
+    ...(config.user && config.password ? ['credentials'] : []),
+  ];
+  if (!authModes.length) {
+    throw new ApiError(500, 'SMS India Hub API key is not configured');
+  }
   let finalResponse = null;
   let finalResponseText = '';
   let delivered = false;
