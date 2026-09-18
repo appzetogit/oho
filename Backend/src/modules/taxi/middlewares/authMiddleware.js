@@ -72,6 +72,13 @@ export const authenticate = (allowedRoles = [], options = {}) => async (req, _re
       throw new ApiError(401, 'Authenticated account no longer exists');
     }
 
+    // Server-side sign-out. Reported as 'jwt expired' on purpose: that is the
+    // exact message the apps already treat as "session over, log in again",
+    // so a forced logout needs no app update.
+    if (entity.tokensValidAfter && Number(payload.iat) * 1000 < new Date(entity.tokensValidAfter).getTime()) {
+      throw new ApiError(401, 'jwt expired');
+    }
+
     if (
       normalizedRole === 'user' &&
       (entity.deletedAt || entity.isActive === false || entity.active === false)
