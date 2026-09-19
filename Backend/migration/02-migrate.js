@@ -571,6 +571,9 @@ for (const d of rawDrivers) {
     city: str(d.city),
     profileImage: str(u.profile_picture),
     profile_picture: str(u.profile_picture),
+    // Riders always got this; drivers did not, so 224 drivers arrived with no
+    // push token. See 13-restore-driver-fcm-tokens.js.
+    fcmTokenMobile: str(u.fcm_token),
 
     owner_id: map.owner.get(String(d.owner_id)) || null,
     service_location_id: map.location.get(String(d.service_location_id)) || null,
