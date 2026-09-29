@@ -383,8 +383,6 @@ export const settleCompletedRideWallet = async ({ rideId }) => {
     });
     const paymentMethod = normalizePaymentMethod(ride.paymentMethod);
     const driverEarnings = Math.max(Math.round((fare - commissionAmount) * 100) / 100, 0);
-    const amount = paymentMethod === 'cash' ? -commissionAmount : driverEarnings;
-    const type = paymentMethod === 'cash' ? 'commission_deduction' : 'ride_earning';
 
     ride.paymentMethod = paymentMethod;
     ride.commissionAmount = commissionAmount;
@@ -397,34 +395,71 @@ export const settleCompletedRideWallet = async ({ rideId }) => {
     };
     await ride.save({ session });
 
-    if (!amount) {
-      await session.commitTransaction();
-      return null;
+    const sharedMetadata = {
+      fare,
+      commissionAmount,
+      driverEarnings,
+      paymentMethod,
+      commissionSource: commissionConfig.source,
+      commissionType: normalizeCommissionType(commissionConfig.type),
+      commissionValue: Number(commissionConfig.value || 0),
+    };
+
+    // Two separate ledger rows so the driver's wallet history shows exactly what
+    // happened: the fare landing, then the admin's commission coming back out.
+    // A single net figure balanced correctly but left no trace of either leg.
+    let earningResult = null;
+    let commissionResult = null;
+
+    if (paymentMethod === 'cash') {
+      // The driver already holds the cash fare in hand; only the commission
+      // ever touches the wallet.
+      if (commissionAmount > 0) {
+        commissionResult = await applyDriverWalletAdjustment({
+          driverId: ride.driverId,
+          rideId: ride._id,
+          amount: -commissionAmount,
+          type: 'commission_deduction',
+          description: 'Commission deducted for cash ride',
+          metadata: sharedMetadata,
+          session,
+        });
+      }
+    } else {
+      if (fare > 0) {
+        earningResult = await applyDriverWalletAdjustment({
+          driverId: ride.driverId,
+          rideId: ride._id,
+          amount: fare,
+          type: 'ride_earning',
+          description: 'Driver earning credited for online ride',
+          metadata: sharedMetadata,
+          session,
+        });
+      }
+
+      if (commissionAmount > 0) {
+        commissionResult = await applyDriverWalletAdjustment({
+          driverId: ride.driverId,
+          rideId: ride._id,
+          amount: -commissionAmount,
+          type: 'commission_deduction',
+          description: 'Commission deducted for online ride',
+          metadata: sharedMetadata,
+          session,
+        });
+      }
     }
 
-    const result = await applyDriverWalletAdjustment({
-      driverId: ride.driverId,
-      rideId: ride._id,
-      amount,
-      type,
-      description: paymentMethod === 'cash'
-        ? 'Commission deducted for cash ride'
-        : 'Driver earning credited for online ride',
-      metadata: {
-        fare,
-        commissionAmount,
-        driverEarnings,
-        paymentMethod,
-        commissionSource: commissionConfig.source,
-        commissionType: normalizeCommissionType(commissionConfig.type),
-        commissionValue: Number(commissionConfig.value || 0),
-      },
-      session,
-    });
-
     await session.commitTransaction();
+
+    const latestResult = commissionResult || earningResult;
     return {
-      ...result,
+      driver: latestResult?.driver ?? null,
+      wallet: latestResult?.wallet ?? null,
+      transaction: (commissionResult ?? earningResult)?.transaction ?? null,
+      earningTransaction: earningResult?.transaction ?? null,
+      commissionTransaction: commissionResult?.transaction ?? null,
       ride,
     };
   } catch (error) {
