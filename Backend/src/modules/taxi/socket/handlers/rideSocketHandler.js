@@ -220,6 +220,8 @@ export const registerRideSocketHandlers = ({ io, socket, onAsync }) => {
           io.to(getDriverRoom(socket.auth.sub)).emit('driver:wallet:updated', {
             wallet: walletUpdate.wallet,
             transaction: walletUpdate.transaction,
+            earningTransaction: walletUpdate.earningTransaction,
+            commissionTransaction: walletUpdate.commissionTransaction,
           });
         }
         clearDriverRoute(socket.auth.sub);
