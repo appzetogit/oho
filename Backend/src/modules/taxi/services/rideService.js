@@ -17,7 +17,7 @@ import { Ride } from '../user/models/Ride.js';
 import { User } from '../user/models/User.js';
 import { UserWallet } from '../user/models/UserWallet.js';
 import { consumeUserSubscriptionRide, resolveApplicableUserSubscription } from '../user/services/subscriptionService.js';
-import { applyPromoToRideInTransaction } from './promoService.js';
+import { reservePromoForRide } from './promoService.js';
 import { getTipSettings } from './appSettingsService.js';
 import { getBidRideSettings } from './transportSettingsService.js';
 import { notifyRideLifecycle } from './rideNotificationService.js';
@@ -1136,92 +1136,75 @@ export const createRideRecord = async ({
     return ride;
   }
 
-  let lastError = null;
+  // A promo is reserved before the ride exists, and the ride is created with
+  // the discount already applied. No transaction: production is a standalone
+  // MongoDB, which cannot start one, so a promo booking used to fail every time.
+  // reservePromoForRide undoes its own writes if it fails part-way, and
+  // release() hands the promo back if anything after it fails.
+  const rideId = new mongoose.Types.ObjectId();
+  const promoReservation = await reservePromoForRide({
+    rideId,
+    userId,
+    code: promoCode,
+    fare: safeFare,
+    service_location_id,
+    transport_type: transport_type || 'taxi',
+  });
 
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const session = await mongoose.startSession();
+  let ride = null;
+  try {
+    ride = await Ride.create({
+      _id: rideId,
+      userId,
+      vehicleTypeId: primaryVehicleTypeId,
+      dispatchVehicleTypeIds,
+      vehicleIconType: vehicleIconType || '',
+      vehicleIconUrl: resolvedVehicleIconUrl,
+      serviceType: normalizedServiceType,
+      pickupLocation: toPoint(pickupCoords, 'pickup'),
+      pickupAddress: normalizeAddress(pickupAddress),
+      dropLocation: toPoint(dropCoords, 'drop'),
+      dropAddress: normalizeAddress(dropAddress),
+      fare: promoReservation.breakdown.fare_after_discount,
+      baseFare: safeFare,
+      bookingMode: effectiveBookingMode,
+      pricingNegotiationMode,
+      biddingStatus: pricingNegotiationMode === 'driver_bid' ? 'open' : 'none',
+      bidStepAmount: effectiveBidStepAmount,
+      bidFloorFare: effectiveBidFloorFare,
+      userMaxBidFare: effectiveUserMaxBidFare,
+      bidCeilingMaxFare: effectiveBidCeilingMaxFare,
+      fareIncreaseWaitMinutes: pricingNegotiationMode === 'user_increment_only' ? fareIncreaseWaitMinutes : 0,
+      nextFareIncreaseAt,
+      estimatedDistanceMeters: safeEstimatedDistanceMeters,
+      estimatedDurationMinutes: safeEstimatedDurationMinutes,
+      paymentMethod: effectivePaymentMethod,
+      driverPaymentCollection: effectiveDriverPaymentCollection,
+      subscriptionUsage: effectiveSubscriptionUsage,
+      otp: generateRideOtp(),
+      service_location_id: resolvedServiceLocationId,
+      transport_type: normalizedTransportType,
+      pricingSnapshot,
+      parcel: normalizeParcelPayload(parcel),
+      intercity: normalizeIntercityPayload(intercity),
+      scheduledAt: normalizedScheduledAt,
+      status: RIDE_STATUS.SEARCHING,
+      liveStatus: RIDE_LIVE_STATUS.SEARCHING,
+      promo: promoReservation.ridePromo,
+    });
 
-    try {
-      session.startTransaction();
-
-      const ride = await Ride.create(
-        [
-          {
-            userId,
-            vehicleTypeId: primaryVehicleTypeId,
-            dispatchVehicleTypeIds,
-            vehicleIconType: vehicleIconType || '',
-            vehicleIconUrl: resolvedVehicleIconUrl,
-            serviceType: normalizedServiceType,
-            pickupLocation: toPoint(pickupCoords, 'pickup'),
-            pickupAddress: normalizeAddress(pickupAddress),
-            dropLocation: toPoint(dropCoords, 'drop'),
-            dropAddress: normalizeAddress(dropAddress),
-            fare: effectiveStartingFare,
-            baseFare: safeFare,
-            bookingMode: effectiveBookingMode,
-            pricingNegotiationMode,
-            biddingStatus: pricingNegotiationMode === 'driver_bid' ? 'open' : 'none',
-            bidStepAmount: effectiveBidStepAmount,
-            bidFloorFare: effectiveBidFloorFare,
-            userMaxBidFare: effectiveUserMaxBidFare,
-            bidCeilingMaxFare: effectiveBidCeilingMaxFare,
-            fareIncreaseWaitMinutes: pricingNegotiationMode === 'user_increment_only' ? fareIncreaseWaitMinutes : 0,
-            nextFareIncreaseAt,
-            estimatedDistanceMeters: safeEstimatedDistanceMeters,
-            estimatedDurationMinutes: safeEstimatedDurationMinutes,
-            paymentMethod: effectivePaymentMethod,
-            driverPaymentCollection: effectiveDriverPaymentCollection,
-            subscriptionUsage: effectiveSubscriptionUsage,
-            otp: generateRideOtp(),
-            service_location_id: resolvedServiceLocationId,
-            transport_type: normalizedTransportType,
-            pricingSnapshot,
-            parcel: normalizeParcelPayload(parcel),
-            intercity: normalizeIntercityPayload(intercity),
-            scheduledAt: normalizedScheduledAt,
-            status: RIDE_STATUS.SEARCHING,
-            liveStatus: RIDE_LIVE_STATUS.SEARCHING,
-          },
-        ],
-        { session },
-      );
-
-      const rideDoc = ride[0];
-
-      user.currentRideId = rideDoc._id;
-      await user.save({ session });
-
-      await applyPromoToRideInTransaction({
-        session,
-        ride: rideDoc,
-        userId,
-        code: promoCode,
-        fare: safeFare,
-        service_location_id,
-        transport_type: transport_type || 'taxi',
-      });
-
-      await session.commitTransaction();
-      await syncDeliveryWithRide(rideDoc);
-      return rideDoc;
-    } catch (error) {
-      lastError = error;
-      await session.abortTransaction();
-
-      const isTransient =
-        typeof error?.hasErrorLabel === 'function' &&
-        (error.hasErrorLabel('TransientTransactionError') || error.hasErrorLabel('UnknownTransactionCommitResult'));
-
-      if (!isTransient || attempt === 2) {
-        throw error;
-      }
-    } finally {
-      session.endSession();
+    user.currentRideId = ride._id;
+    await user.save();
+  } catch (error) {
+    if (ride) {
+      await Ride.deleteOne({ _id: ride._id }).catch(() => null);
     }
+    await promoReservation.release().catch(() => null);
+    throw error;
   }
 
-  throw lastError || new ApiError(500, 'Failed to create ride with promo');
+  await syncDeliveryWithRide(ride);
+  return ride;
 };
 
 /// Where the socket relay parks the driver's true latest position.
@@ -2187,112 +2170,148 @@ export const enableRideFareIncrease = async ({ rideId, userId }) => {
 };
 
 export const acceptRideBidAssignment = async ({ rideId, bidId, userId }) => {
-  let lastError = null;
+  // Written without a transaction for the same reason as acceptRideAssignment:
+  // production is a standalone mongod, which rejects transactions outright, so
+  // no rider could ever accept a bid.
+  //
+  // Three single-document claims replace it, in the order that keeps a lost race
+  // cheap to undo: the driver (still free), then the ride (still open for
+  // bids), then the bid (still pending). Each filter carries its precondition,
+  // so only one request can win each claim; whoever loses releases what it
+  // already took.
+  const rideFilter = {
+    _id: rideId,
+    userId,
+    status: RIDE_STATUS.SEARCHING,
+    liveStatus: RIDE_LIVE_STATUS.SEARCHING,
+    bookingMode: 'bidding',
+    biddingStatus: 'open',
+    driverId: null,
+  };
 
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const session = await mongoose.startSession();
-
-    try {
-      session.startTransaction();
-
-      const ride = await Ride.findOne({
-        _id: rideId,
-        userId,
-        status: RIDE_STATUS.SEARCHING,
-        liveStatus: RIDE_LIVE_STATUS.SEARCHING,
-        bookingMode: 'bidding',
-        biddingStatus: 'open',
-        driverId: null,
-      }).session(session);
-
-      if (!ride) {
-        throw new ApiError(409, 'Ride is no longer available for bid acceptance');
-      }
-
-      const bid = await RideBid.findOne({
-        _id: bidId,
-        rideId: ride._id,
-        status: 'pending',
-      }).session(session);
-
-      if (!bid) {
-        throw new ApiError(404, 'Bid not found');
-      }
-
-      const driverVehicleFilter = await buildDriverVehicleAcceptFilter(ride);
-      const driver = await Driver.findOne({
-        _id: bid.driverId,
-        isOnline: true,
-        isOnRide: false,
-        'wallet.isBlocked': { $ne: true },
-        ...driverVehicleFilter,
-      }).session(session);
-
-      if (!driver) {
-        throw new ApiError(409, 'Driver is unavailable to accept this bid');
-      }
-
-      const blockedDriverIds = await getDriverIdsBlockedByUpcomingScheduledRides([String(bid.driverId || '')], { session });
-      if (blockedDriverIds.has(String(bid.driverId || ''))) {
-        throw new ApiError(409, 'Driver is blocked from new rides within 30 minutes of a scheduled trip');
-      }
-
-      const conflictingScheduledRide = await findDriverConflictingScheduledRide({
-        driverId: String(bid.driverId || ''),
-        ride,
-        excludeRideId: ride._id,
-        session,
-      });
-      if (conflictingScheduledRide) {
-        throw new ApiError(409, 'Driver already has another scheduled trip in a similar time range');
-      }
-
-      await ensureDriverWalletCanAcceptRide(driver, { session });
-
-      ride.driverId = driver._id;
-      ride.fare = Number(bid.bidFare || ride.fare || 0);
-      ride.acceptedBidId = bid._id;
-      ride.status = RIDE_STATUS.ACCEPTED;
-      ride.liveStatus = RIDE_LIVE_STATUS.ACCEPTED;
-      ride.biddingStatus = 'accepted';
-      ride.acceptedAt = new Date();
-      driver.isOnRide = !isRideScheduledForFuture(ride);
-      bid.status = 'accepted';
-
-      await ride.save({ session });
-      await driver.save({ session });
-      await bid.save({ session });
-      await RideBid.updateMany(
-        {
-          rideId: ride._id,
-          _id: { $ne: bid._id },
-          status: 'pending',
-        },
-        { status: 'rejected' },
-        { session },
-      );
-
-      await session.commitTransaction();
-      await syncDeliveryWithRide(ride);
-
-      return ride;
-    } catch (error) {
-      lastError = error;
-      await session.abortTransaction();
-
-      const isTransient =
-        typeof error?.hasErrorLabel === 'function' &&
-        (error.hasErrorLabel('TransientTransactionError') || error.hasErrorLabel('UnknownTransactionCommitResult'));
-
-      if (!isTransient || attempt === 2) {
-        throw error;
-      }
-    } finally {
-      session.endSession();
-    }
+  const ride = await Ride.findOne(rideFilter);
+  if (!ride) {
+    throw new ApiError(409, 'Ride is no longer available for bid acceptance');
   }
 
-  throw lastError || new ApiError(500, 'Failed to accept ride bid');
+  const bid = await RideBid.findOne({
+    _id: bidId,
+    rideId: ride._id,
+    status: 'pending',
+  });
+  if (!bid) {
+    throw new ApiError(404, 'Bid not found');
+  }
+
+  const driverVehicleFilter = await buildDriverVehicleAcceptFilter(ride);
+  const driverFilter = {
+    _id: bid.driverId,
+    isOnline: true,
+    isOnRide: false,
+    'wallet.isBlocked': { $ne: true },
+    ...driverVehicleFilter,
+  };
+
+  const driver = await Driver.findOne(driverFilter);
+  if (!driver) {
+    throw new ApiError(409, 'Driver is unavailable to accept this bid');
+  }
+
+  const blockedDriverIds = await getDriverIdsBlockedByUpcomingScheduledRides([String(bid.driverId || '')]);
+  if (blockedDriverIds.has(String(bid.driverId || ''))) {
+    throw new ApiError(409, 'Driver is blocked from new rides within 30 minutes of a scheduled trip');
+  }
+
+  const conflictingScheduledRide = await findDriverConflictingScheduledRide({
+    driverId: String(bid.driverId || ''),
+    ride,
+    excludeRideId: ride._id,
+  });
+  if (conflictingScheduledRide) {
+    throw new ApiError(409, 'Driver already has another scheduled trip in a similar time range');
+  }
+
+  await ensureDriverWalletCanAcceptRide(driver);
+
+  // A trip booked for later does not occupy the driver now.
+  const occupyDriver = !isRideScheduledForFuture(ride);
+
+  const claimedDriver = await Driver.findOneAndUpdate(
+    driverFilter,
+    { $set: { isOnRide: occupyDriver } },
+    { returnDocument: 'after' },
+  );
+  if (!claimedDriver) {
+    throw new ApiError(409, 'Driver is unavailable to accept this bid');
+  }
+
+  const releaseDriver = async () => {
+    if (occupyDriver) {
+      await Driver.updateOne(
+        { _id: claimedDriver._id, isOnRide: true },
+        { $set: { isOnRide: false } },
+      ).catch(() => null);
+    }
+  };
+
+  const acceptedRide = await Ride.findOneAndUpdate(
+    rideFilter,
+    {
+      $set: {
+        driverId: claimedDriver._id,
+        fare: Number(bid.bidFare || ride.fare || 0),
+        acceptedBidId: bid._id,
+        status: RIDE_STATUS.ACCEPTED,
+        liveStatus: RIDE_LIVE_STATUS.ACCEPTED,
+        biddingStatus: 'accepted',
+        acceptedAt: new Date(),
+      },
+    },
+    { returnDocument: 'after' },
+  );
+  if (!acceptedRide) {
+    await releaseDriver();
+    throw new ApiError(409, 'Ride is no longer available for bid acceptance');
+  }
+
+  const acceptedBid = await RideBid.findOneAndUpdate(
+    { _id: bid._id, rideId: ride._id, status: 'pending' },
+    { $set: { status: 'accepted' } },
+    { returnDocument: 'after' },
+  );
+  if (!acceptedBid) {
+    // The bid was withdrawn between the read and now: reopen the ride exactly
+    // as it was, and free the driver.
+    await Ride.updateOne(
+      { _id: ride._id, driverId: claimedDriver._id, acceptedBidId: bid._id },
+      {
+        $set: {
+          driverId: null,
+          fare: ride.fare,
+          acceptedBidId: ride.acceptedBidId ?? null,
+          status: RIDE_STATUS.SEARCHING,
+          liveStatus: RIDE_LIVE_STATUS.SEARCHING,
+          biddingStatus: 'open',
+          acceptedAt: ride.acceptedAt ?? null,
+        },
+      },
+    ).catch(() => null);
+    await releaseDriver();
+    throw new ApiError(404, 'Bid not found');
+  }
+
+  await RideBid.updateMany(
+    {
+      rideId: ride._id,
+      _id: { $ne: bid._id },
+      status: 'pending',
+    },
+    { status: 'rejected' },
+  );
+
+  await syncDeliveryWithRide(acceptedRide);
+
+  return acceptedRide;
 };
 
 export const submitRideFeedback = async ({ rideId, userId, rating, comment = '', tipAmount = 0 }) => {

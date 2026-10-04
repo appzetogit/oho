@@ -166,25 +166,72 @@ const finalizeRideCompletion = async ({
   tipAmount = 0,
   paymentRecord = null,
   paymentSource = '',
-  session = null,
+  collectPayment = null,
 }) => {
-  if (ride.feedback?.submittedAt) {
+  const alreadySubmitted = (submittedRide) => {
     const samePayment =
-      (paymentRecord?.providerPaymentId && String(ride.driverPaymentCollection?.providerPaymentId || '') === paymentRecord.providerPaymentId) ||
-      (paymentRecord?.providerPaymentId && String(ride.feedback?.tipPaymentId || '') === paymentRecord.providerPaymentId);
+      (paymentRecord?.providerPaymentId && String(submittedRide.driverPaymentCollection?.providerPaymentId || '') === paymentRecord.providerPaymentId) ||
+      (paymentRecord?.providerPaymentId && String(submittedRide.feedback?.tipPaymentId || '') === paymentRecord.providerPaymentId);
 
     if (samePayment) {
-      return getRideDetails(ride._id);
+      return getRideDetails(submittedRide._id);
     }
 
     throw new ApiError(409, 'Feedback already submitted for this ride');
+  };
+
+  if (ride.feedback?.submittedAt) {
+    return alreadySubmitted(ride);
   }
 
-  const driver = await Driver.findById(ride.driverId).session(session);
-  if (!driver) {
-    throw new ApiError(404, 'Driver not found');
+  // No transaction: production is a standalone MongoDB, which cannot start one.
+  // Claim the ride instead by stamping feedback.submittedAt in one atomic
+  // update, so two requests for the same ride cannot both charge the rider or
+  // credit the driver. Until the driver is credited, any failure refunds the
+  // rider and releases the claim so the rider can simply try again.
+  const claim = await Ride.updateOne(
+    { _id: ride._id, 'feedback.submittedAt': null },
+    { $set: { 'feedback.submittedAt': new Date() } },
+  );
+  if (!claim.modifiedCount) {
+    const current = await Ride.findById(ride._id);
+    return alreadySubmitted(current || ride);
   }
 
+  let undoPayment = null;
+  let driverCredited = false;
+  try {
+    const driver = await Driver.findById(ride.driverId).select('_id').lean();
+    if (!driver) {
+      throw new ApiError(404, 'Driver not found');
+    }
+
+    if (collectPayment) {
+      undoPayment = await collectPayment();
+    }
+
+    return await settleRideCompletion({ ride, userId, rating, comment, tipAmount, paymentRecord, paymentSource, onDriverCredited: () => { driverCredited = true; } });
+  } catch (error) {
+    // Once the driver has been paid the claim stays, so a retry can never pay
+    // them twice; before that, put everything back.
+    if (!driverCredited) {
+      if (undoPayment) await undoPayment().catch(() => null);
+      await Ride.updateOne({ _id: ride._id }, { $set: { 'feedback.submittedAt': null } }).catch(() => null);
+    }
+    throw error;
+  }
+};
+
+const settleRideCompletion = async ({
+  ride,
+  userId,
+  rating,
+  comment,
+  tipAmount,
+  paymentRecord,
+  paymentSource,
+  onDriverCredited,
+}) => {
   const { fare, fareDue, totalCharge } = buildCompletionAmounts(ride, tipAmount);
   const previousPaymentMethod = String(ride.paymentMethod || 'cash').trim().toLowerCase() === 'cash' ? 'cash' : 'online';
   const driverCreditAmount = roundMoney(
@@ -212,9 +259,9 @@ const finalizeRideCompletion = async ({
         providerOrderId: paymentRecord?.providerOrderId || '',
         providerPaymentId: paymentRecord?.providerPaymentId || '',
       },
-      session,
     });
   }
+  onDriverCredited();
 
   if (fareDue > 0) {
     ride.paymentMethod = 'online';
@@ -259,14 +306,19 @@ const finalizeRideCompletion = async ({
     submittedAt: new Date(),
   };
 
-  driver.ratingCount = Number(driver.ratingCount || 0) + 1;
-  driver.totalRatingScore = Number(driver.totalRatingScore || 0) + rating;
-  driver.rating = Number((driver.totalRatingScore / driver.ratingCount).toFixed(1));
+  await ride.save();
 
-  await Promise.all([
-    ride.save({ session }),
-    driver.save({ session }),
-  ]);
+  // One pipeline update, so concurrent ratings for the same driver cannot
+  // overwrite each other's count.
+  await Driver.updateOne({ _id: ride.driverId }, [
+    {
+      $set: {
+        ratingCount: { $add: [{ $ifNull: ['$ratingCount', 0] }, 1] },
+        totalRatingScore: { $add: [{ $ifNull: ['$totalRatingScore', 0] }, rating] },
+      },
+    },
+    { $set: { rating: { $round: [{ $divide: ['$totalRatingScore', '$ratingCount'] }, 1] } } },
+  ], { updatePipeline: true });
 
   return {
     ride: await getRideDetails(ride._id),
@@ -602,57 +654,43 @@ export const verifyRazorpayRideCompletion = async (req, res) => {
     throw new ApiError(409, 'This ride completion payment was already processed');
   }
 
-  const session = await mongoose.startSession();
+  const liveRide = await loadCompletedRideForUser(rideId, req.auth.sub);
+  const result = await finalizeRideCompletion({
+    ride: liveRide,
+    userId: req.auth.sub,
+    rating,
+    comment,
+    tipAmount,
+    paymentSource: 'ride_completion_razorpay',
+    paymentRecord: {
+      provider: 'razorpay',
+      providerId: paymentId,
+      providerOrderId: orderId,
+      providerPaymentId: paymentId,
+      providerMode: 'razorpay_order',
+      source: 'ride_completion_razorpay',
+      currency: order.currency || 'INR',
+      paidAt: new Date(),
+    },
+  });
 
-  try {
-    session.startTransaction();
-
-    const liveRide = await loadCompletedRideForUser(rideId, req.auth.sub, session);
-    const result = await finalizeRideCompletion({
-      ride: liveRide,
-      userId: req.auth.sub,
-      rating,
-      comment,
-      tipAmount,
-      paymentSource: 'ride_completion_razorpay',
-      paymentRecord: {
-        provider: 'razorpay',
-        providerId: paymentId,
-        providerOrderId: orderId,
-        providerPaymentId: paymentId,
-        providerMode: 'razorpay_order',
-        source: 'ride_completion_razorpay',
-        currency: order.currency || 'INR',
-        paidAt: new Date(),
+  if (result.walletResult?.transaction) {
+    emitToDriver(liveRide.driverId, 'driver:wallet:updated', {
+      wallet: result.walletResult.wallet,
+      transaction: result.walletResult.transaction,
+      notification: {
+        id: `ride-payment-${paymentId}`,
+        title: 'Payment received',
+        body: `Rs ${paymentAmounts.totalCharge.toFixed(2)} received from rider for completed ride.`,
+        sentAt: new Date().toISOString(),
       },
-      session,
     });
-
-    await session.commitTransaction();
-
-    if (result.walletResult?.transaction) {
-      emitToDriver(liveRide.driverId, 'driver:wallet:updated', {
-        wallet: result.walletResult.wallet,
-        transaction: result.walletResult.transaction,
-        notification: {
-          id: `ride-payment-${paymentId}`,
-          title: 'Payment received',
-          body: `Rs ${paymentAmounts.totalCharge.toFixed(2)} received from rider for completed ride.`,
-          sentAt: new Date().toISOString(),
-        },
-      });
-    }
-
-    res.json({
-      success: true,
-      data: result.ride,
-    });
-  } catch (error) {
-    await session.abortTransaction();
-    throw error;
-  } finally {
-    session.endSession();
   }
+
+  res.json({
+    success: true,
+    data: result.ride,
+  });
 };
 
 export const payRideCompletionWithWallet = async (req, res) => {
@@ -664,85 +702,89 @@ export const payRideCompletionWithWallet = async (req, res) => {
     tipAmount: req.body?.tipAmount,
   });
 
-  const session = await mongoose.startSession();
+  const ride = await loadCompletedRideForUser(rideId, req.auth.sub);
+  const paymentAmounts = buildCompletionAmounts(ride, tipAmount);
 
-  try {
-    session.startTransaction();
+  if (paymentAmounts.totalCharge <= 0) {
+    throw new ApiError(400, 'No payable amount remains for this ride');
+  }
 
-    const ride = await loadCompletedRideForUser(rideId, req.auth.sub, session);
-    const paymentAmounts = buildCompletionAmounts(ride, tipAmount);
+  await ensureUserWallet(req.auth.sub);
+  const transferId = crypto.randomUUID();
 
-    if (paymentAmounts.totalCharge <= 0) {
-      throw new ApiError(400, 'No payable amount remains for this ride');
-    }
+  // The debit is one conditional update, so the balance check and deduction
+  // cannot race. finalizeRideCompletion runs it inside its ride claim and
+  // calls the returned undo if the driver credit fails.
+  const collectPayment = async () => {
+    const debit = await UserWallet.updateOne(
+      { userId: req.auth.sub, balance: { $gte: paymentAmounts.totalCharge } },
+      {
+        $inc: { balance: -paymentAmounts.totalCharge },
+        $push: {
+          transactions: {
+            $each: [{
+              kind: 'debit',
+              amount: paymentAmounts.totalCharge,
+              title: `Ride payment for ${rideId.slice(-6)}${tipAmount > 0 ? ' with tip' : ''}`,
+              provider: 'ride_completion_wallet',
+              providerPaymentId: transferId,
+            }],
+            $slice: -50,
+          },
+        },
+      },
+    );
 
-    await ensureUserWallet(req.auth.sub, session);
-    const userWallet = await UserWallet.findOne({ userId: req.auth.sub }).session(session);
-    if (!userWallet) {
-      throw new ApiError(404, 'User wallet not found');
-    }
-
-    if (Number(userWallet.balance || 0) < paymentAmounts.totalCharge) {
+    if (!debit.modifiedCount) {
       throw new ApiError(400, 'Insufficient wallet balance');
     }
 
-    const transferId = crypto.randomUUID();
-    userWallet.balance = roundMoney(Number(userWallet.balance || 0) - paymentAmounts.totalCharge);
-    userWallet.transactions.push({
-      kind: 'debit',
-      amount: paymentAmounts.totalCharge,
-      title: `Ride payment for ${rideId.slice(-6)}${tipAmount > 0 ? ' with tip' : ''}`,
-      provider: 'ride_completion_wallet',
-      providerPaymentId: transferId,
-    });
-    userWallet.transactions = userWallet.transactions.slice(-50);
-    await userWallet.save({ session });
-
-    const result = await finalizeRideCompletion({
-      ride,
-      userId: req.auth.sub,
-      rating,
-      comment,
-      tipAmount,
-      paymentSource: 'ride_completion_wallet',
-      paymentRecord: {
-        provider: 'wallet',
-        providerId: transferId,
-        providerOrderId: '',
-        providerPaymentId: transferId,
-        providerMode: 'wallet_internal',
-        source: 'ride_completion_wallet',
-        currency: 'INR',
-        paidAt: new Date(),
+    return () => UserWallet.updateOne(
+      { userId: req.auth.sub },
+      {
+        $inc: { balance: paymentAmounts.totalCharge },
+        $pull: { transactions: { providerPaymentId: transferId } },
       },
-      session,
+    );
+  };
+
+  const result = await finalizeRideCompletion({
+    ride,
+    userId: req.auth.sub,
+    rating,
+    comment,
+    tipAmount,
+    paymentSource: 'ride_completion_wallet',
+    paymentRecord: {
+      provider: 'wallet',
+      providerId: transferId,
+      providerOrderId: '',
+      providerPaymentId: transferId,
+      providerMode: 'wallet_internal',
+      source: 'ride_completion_wallet',
+      currency: 'INR',
+      paidAt: new Date(),
+    },
+    collectPayment,
+  });
+
+  if (result.walletResult?.transaction) {
+    emitToDriver(ride.driverId, 'driver:wallet:updated', {
+      wallet: result.walletResult.wallet,
+      transaction: result.walletResult.transaction,
+      notification: {
+        id: `ride-wallet-${transferId}`,
+        title: 'Payment received',
+        body: `Rs ${paymentAmounts.totalCharge.toFixed(2)} received from rider wallet for completed ride.`,
+        sentAt: new Date().toISOString(),
+      },
     });
-
-    await session.commitTransaction();
-
-    if (result.walletResult?.transaction) {
-      emitToDriver(ride.driverId, 'driver:wallet:updated', {
-        wallet: result.walletResult.wallet,
-        transaction: result.walletResult.transaction,
-        notification: {
-          id: `ride-wallet-${transferId}`,
-          title: 'Payment received',
-          body: `Rs ${paymentAmounts.totalCharge.toFixed(2)} received from rider wallet for completed ride.`,
-          sentAt: new Date().toISOString(),
-        },
-      });
-    }
-
-    res.status(201).json({
-      success: true,
-      data: result.ride,
-    });
-  } catch (error) {
-    await session.abortTransaction();
-    throw error;
-  } finally {
-    session.endSession();
   }
+
+  res.status(201).json({
+    success: true,
+    data: result.ride,
+  });
 };
 
 export const createRazorpayRideTipOrder = async (req, res) => {
