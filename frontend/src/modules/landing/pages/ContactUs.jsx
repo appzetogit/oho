@@ -21,8 +21,8 @@ const ContactUs = () => {
 
   const faqs = [
     {
-      q: 'Does ZI CAB charge any surge pricing during peak hours?',
-      a: 'No! ZI CAB follows a strict zero-surge pricing policy. The fare displayed during booking is your final price regardless of weather, traffic, or late night hours.'
+      q: 'Does OHO RIDE charge any surge pricing during peak hours?',
+      a: 'No! OHO RIDE follows a strict zero-surge pricing policy. The fare displayed during booking is your final price regardless of weather, traffic, or late night hours.'
     },
     {
       q: 'What is the cancellation policy for cab bookings?',
@@ -37,7 +37,7 @@ const ContactUs = () => {
       a: 'We accept Cash to Driver, Google Pay, PhonePe, Paytm, Credit/Debit Cards, and Net Banking.'
     },
     {
-      q: 'How are ZI CAB drivers verified?',
+      q: 'How are OHO RIDE drivers verified?',
       a: 'All driver partners undergo strict background checks, commercial license validation, and police character verification before onboarding.'
     }
   ];
@@ -60,14 +60,14 @@ const ContactUs = () => {
           <div className="contact-cards-grid" data-reveal-stagger>
             <a className="c-info-card" href={`tel:${CONTACT.tollFree.replace(/\s/g, '')}`}>
               <div className="c-icon-wrap">
-                <Phone size={24} color="#00BBA9" />
+                <Phone size={24} color="#D90429" />
               </div>
               <h3>24x7 Toll-Free Support</h3>
               <p>{CONTACT.tollFree}</p>
               <span>{CONTACT.tollFreeLive ? 'Free from any Indian number' : 'Number activation in progress'}</span>
             </a>
 
-            <a className="c-info-card" href={waLink('Hi ZI CAB, I need help with a booking.')} target="_blank" rel="noreferrer">
+            <a className="c-info-card" href={waLink('Hi OHO RIDE, I need help with a booking.')} target="_blank" rel="noreferrer">
               <div className="c-icon-wrap">
                 <MessageSquare size={24} color="#00BBA9" />
               </div>

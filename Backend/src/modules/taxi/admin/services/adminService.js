@@ -461,6 +461,47 @@ const normalizeDriverTemplateType = (value) => {
   return normalized === 'vehicle_field' ? 'vehicle_field' : 'document';
 };
 
+/**
+ * Settle an image_type onto one of the four values the rest of the code knows.
+ *
+ * The Laravel import wrote 'front_and_back' straight into Mongo, past the
+ * schema's enum. Nothing matched it, so those documents were serialized with an
+ * empty `fields` array and the driver app drew no upload boxes for them at all —
+ * Aadhaar and RC simply never appeared on the documents step.
+ */
+/**
+ * Is this driver really on duty right now?
+ *
+ * isOnline is set when a driver goes on duty and nothing ever clears it, so it
+ * survives the app being closed, the phone being switched off, and in the case
+ * of accounts imported from the old system, having never run the new app at
+ * all. A driver is treated as present only if their app has also spoken to the
+ * server within the window below.
+ */
+const DRIVER_PRESENCE_WINDOW_MS = 10 * 60 * 1000;
+
+const isDriverPresent = (driver) => {
+  if (!driver?.isOnline) return false;
+  const lastSeen = driver.lastSeenAt ? new Date(driver.lastSeenAt).getTime() : 0;
+  if (!lastSeen) return false;
+  return Date.now() - lastSeen <= DRIVER_PRESENCE_WINDOW_MS;
+};
+
+const normalizeDocumentImageType = (value) => {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+
+  if (['front_back', 'front_and_back', 'frontback', 'both', 'front_back_both'].includes(normalized)) {
+    return 'front_back';
+  }
+  if (normalized === 'front') return 'front';
+  if (normalized === 'back') return 'back';
+  if (['image', 'single', 'single_image'].includes(normalized)) return 'image';
+  return 'front_back';
+};
+
 const normalizeDriverVehicleFieldType = (value) => {
   const normalized = String(value || 'text').trim().toLowerCase();
   return ['text', 'number', 'textarea', 'select', 'multi_select', 'location_select', 'vehicle_type_select'].includes(normalized)
@@ -2163,7 +2204,7 @@ const serializeOwnerNeededDocument = (item) => ({
   _id: item._id,
   id: item._id,
   name: item.name || '',
-  image_type: item.image_type || 'front_back',
+  image_type: normalizeDocumentImageType(item.image_type),
   has_expiry_date: Boolean(item.has_expiry_date),
   has_identify_number: Boolean(item.has_identify_number),
   is_editable: Boolean(item.is_editable),
@@ -2222,36 +2263,43 @@ const serializeOwnerNeededDocumentTemplate = (item) => ({
 });
 
 const buildDriverDocumentFields = (item) => {
-  if (item.image_type === 'front_back') {
+  const imageType = normalizeDocumentImageType(item.image_type);
+  const baseKey = toDocumentKey(item.name || 'document');
+
+  if (imageType === 'front_back') {
+    // Older rows can carry a blank or human-typed key ("Aadhar Front"); fall back
+    // to one derived from the name so the app always gets something to upload to.
     return [
       {
-        key: item.front_key,
+        key: String(item.front_key || '').trim() || `${baseKey}Front`,
         label: `${item.name} Front`,
         side: 'front',
         required: item.is_required !== false,
       },
       {
-        key: item.back_key,
+        key: String(item.back_key || '').trim() || `${baseKey}Back`,
         label: `${item.name} Back`,
         side: 'back',
         required: item.is_required !== false,
       },
-    ].filter((field) => Boolean(field.key));
+    ];
   }
+
+  const suffix = imageType === 'front' ? 'Front' : imageType === 'back' ? 'Back' : '';
 
   return [
     {
-      key: item.key,
+      key: String(item.key || '').trim() || `${baseKey}${suffix}`,
       label:
-        item.image_type === 'front'
+        imageType === 'front'
           ? `${item.name} Front`
-          : item.image_type === 'back'
+          : imageType === 'back'
             ? `${item.name} Back`
             : item.name,
-      side: item.image_type === 'front' ? 'front' : item.image_type === 'back' ? 'back' : 'single',
+      side: imageType === 'front' ? 'front' : imageType === 'back' ? 'back' : 'single',
       required: item.is_required !== false,
     },
-  ].filter((field) => Boolean(field.key));
+  ];
 };
 
 const serializeDriverVehicleField = (item) => {
@@ -2287,7 +2335,7 @@ const serializeDriverNeededDocument = (item) => ({
   template_type: normalizeDriverTemplateType(item.template_type),
   name: item.name || '',
   account_type: item.account_type || 'individual',
-  image_type: item.image_type || 'front_back',
+  image_type: normalizeDocumentImageType(item.image_type),
   has_expiry_date: Boolean(item.has_expiry_date),
   has_identify_number: Boolean(item.has_identify_number),
   identify_number_key: item.identify_number_key || '',
@@ -2759,7 +2807,12 @@ const serializeDriverListItem = (driver) => ({
       ? Number(driver.rating || 0)
       : 0,
   rating_count: Number(driver.ratingCount || 0),
-  isOnline: Boolean(driver.isOnline),
+  // A driver counts as online only if their app has also been heard from
+  // recently. The raw flag is kept separately so the panel can still show that
+  // someone left themselves "on duty" without ever closing the app.
+  isOnline: isDriverPresent(driver),
+  isOnlineFlag: Boolean(driver.isOnline),
+  last_seen_at: driver.lastSeenAt || null,
   isOnRide: Boolean(driver.isOnRide),
   online_selfie_image: driver.onlineSelfie?.imageUrl || '',
   online_selfie_captured_at: driver.onlineSelfie?.capturedAt || null,
@@ -4762,38 +4815,59 @@ export const getDriverWithdrawalContextByRequestId = async ({ requestId, page = 
   });
 };
 
+/**
+ * Approve a payout and take the money out of the driver's wallet.
+ *
+ * This used to run inside a Mongo transaction, but the database is a standalone
+ * server, which cannot start one — so every approval failed with a 500 while
+ * rejection (no transaction) worked. Without transactions the two writes are
+ * ordered so that no failure can pay a driver twice or lose the deduction:
+ *
+ *   1. claim the request by flipping pending -> completed in one atomic update;
+ *      a second click finds nothing to claim and is refused,
+ *   2. deduct from the wallet,
+ *   3. if the deduction fails, put the request back to pending.
+ *
+ * The claim happens first on purpose: the worst case is a request marked
+ * completed with the deduction rolled back to pending, which is visible and
+ * repeatable, rather than money deducted twice.
+ */
 export const approveDriverWithdrawalRequest = async (requestId, adminId = null) => {
-  const session = await mongoose.startSession();
+  const existing = await WithdrawalRequest.findById(requestId);
+  if (!existing || !existing.driver_id) {
+    throw new ApiError(404, 'Withdrawal request not found');
+  }
 
+  const driver = await Driver.findById(existing.driver_id);
+  if (!driver) {
+    throw new ApiError(404, 'Driver not found');
+  }
+
+  const requestAmount = Math.round(Number(existing.amount || 0) * 100) / 100;
+  const currentBalance = Math.round(Number(driver.wallet?.balance || 0) * 100) / 100;
+
+  if (!Number.isFinite(requestAmount) || requestAmount <= 0) {
+    throw new ApiError(400, 'Withdrawal request amount is invalid');
+  }
+
+  if (currentBalance < requestAmount) {
+    throw new ApiError(400, 'Driver wallet balance is not enough for this withdrawal');
+  }
+
+  // Only one caller can move it off 'pending', so a double click cannot pay twice.
+  const request = await WithdrawalRequest.findOneAndUpdate(
+    { _id: requestId, status: 'pending' },
+    { $set: { status: 'completed' } },
+    { returnDocument: 'after' },
+  );
+
+  if (!request) {
+    throw new ApiError(400, 'Only pending withdrawal requests can be approved');
+  }
+
+  let walletResult;
   try {
-    session.startTransaction();
-
-    const request = await WithdrawalRequest.findById(requestId).session(session);
-    if (!request || !request.driver_id) {
-      throw new ApiError(404, 'Withdrawal request not found');
-    }
-
-    if (request.status !== 'pending') {
-      throw new ApiError(400, 'Only pending withdrawal requests can be approved');
-    }
-
-    const driver = await Driver.findById(request.driver_id).session(session);
-    if (!driver) {
-      throw new ApiError(404, 'Driver not found');
-    }
-
-    const requestAmount = Math.round(Number(request.amount || 0) * 100) / 100;
-    const currentBalance = Math.round(Number(driver.wallet?.balance || 0) * 100) / 100;
-
-    if (!Number.isFinite(requestAmount) || requestAmount <= 0) {
-      throw new ApiError(400, 'Withdrawal request amount is invalid');
-    }
-
-    if (currentBalance < requestAmount) {
-      throw new ApiError(400, 'Driver wallet balance is not enough for this withdrawal');
-    }
-
-    const walletResult = await applyDriverWalletAdjustment({
+    walletResult = await applyDriverWalletAdjustment({
       driverId: driver._id,
       amount: -requestAmount,
       type: 'adjustment',
@@ -4803,37 +4877,30 @@ export const approveDriverWithdrawalRequest = async (requestId, adminId = null) 
         approvedBy: adminId ? String(adminId) : null,
         paymentMethod: request.payment_method || 'bank_transfer',
       },
-      session,
     });
-
-    request.status = 'completed';
-    await request.save({ session });
-
-    await session.commitTransaction();
-
-    emitToDriver(driver._id, 'driver:wallet:updated', {
-      wallet: walletResult.wallet,
-      transaction: walletResult.transaction,
-    });
-
-    return {
-      request: {
-        _id: request._id,
-        driver_id: request.driver_id,
-        amount: requestAmount,
-        payment_method: request.payment_method || '',
-        status: request.status,
-        createdAt: request.createdAt,
-        updatedAt: request.updatedAt,
-      },
-      wallet: walletResult.wallet,
-    };
   } catch (error) {
-    await session.abortTransaction();
+    // Nothing left the wallet, so hand the request back to the queue.
+    await WithdrawalRequest.updateOne({ _id: requestId }, { $set: { status: 'pending' } });
     throw error;
-  } finally {
-    session.endSession();
   }
+
+  emitToDriver(driver._id, 'driver:wallet:updated', {
+    wallet: walletResult.wallet,
+    transaction: walletResult.transaction,
+  });
+
+  return {
+    request: {
+      _id: request._id,
+      driver_id: request.driver_id,
+      amount: requestAmount,
+      payment_method: request.payment_method || '',
+      status: request.status,
+      createdAt: request.createdAt,
+      updatedAt: request.updatedAt,
+    },
+    wallet: walletResult.wallet,
+  };
 };
 
 export const rejectDriverWithdrawalRequest = async (requestId) => {
@@ -5926,7 +5993,9 @@ const toAdminRideRow = (ride) => {
     tripStatus,
     rideStatus: ride.status,
     liveStatus: ride.liveStatus,
-    paymentOption: 'CASH',
+    // Was hardcoded to CASH, so every trip in the panel claimed to be a cash
+    // trip whatever the customer actually paid with.
+    paymentOption: String(ride.paymentMethod || 'cash').toUpperCase(),
     fare: Number(ride.fare || 0),
     // Prefer the human address the customer actually gave. Falling straight to
     // coordinates showed "12.9716, 77.5946" for website bookings, which carry a
@@ -9958,7 +10027,7 @@ export const deleteRentalPackageType = async (id) => {
 };
 
 const buildDriverNeededDocumentKeys = (payload = {}, existing = null) => {
-  const imageType = String(payload.image_type || existing?.image_type || 'front_back').trim();
+  const imageType = normalizeDocumentImageType(payload.image_type || existing?.image_type);
   const verificationType = normalizeDriverDocumentVerificationType(
     payload.verification_type || existing?.verification_type,
   );

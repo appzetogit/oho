@@ -60,17 +60,17 @@ const AboutUs = ({ openBookingModal }) => {
 
   return (
     <div className="about-page animate-fade-in" ref={pageRef}>
-      {/* Page Header */}
-      <div className="page-hero">
+      {/* Page Hero */}
+      <section className="page-hero">
         <div className="container">
-          <span className="page-tag">About ZI CAB</span>
+          <span className="page-tag">About OHO RIDE</span>
           <h1 className="page-title">Redefining Premium Cab Services Across Karnataka</h1>
           <p className="page-subtitle">
             Built on trust, safety, and reliability. Seamless city, outstation and airport rides —
             now live in Bengaluru, Mangaluru and Hubballi.
           </p>
         </div>
-      </div>
+      </section>
 
       {/* Stats Counter Bar */}
       <section className="stats-section">
@@ -103,10 +103,10 @@ const AboutUs = ({ openBookingModal }) => {
           <div className="story-content" data-reveal>
             <h2 className="section-title">Our Story & Mission</h2>
             <p className="body-text">
-              ZI CAB was founded with a clear mission: to eliminate ride cancellations, surge pricing shocks, and unverified driver risks for travelers in Karnataka.
+              OHO RIDE was founded with a clear mission: to eliminate ride cancellations, surge pricing shocks, and unverified driver risks for travelers in Karnataka.
             </p>
             <p className="body-text">
-              Whether you need an early morning 4 AM airport cab in Bengaluru, an executive sedan for corporate travel, or a family SUV for an outstation weekend trip to Coorg, ZI CAB ensures guaranteed on-time pickup with professional drivers.
+              Whether you need an early morning 4 AM airport cab in Bengaluru, an executive sedan for corporate travel, or a family SUV for an outstation weekend trip to Coorg, OHO RIDE ensures guaranteed on-time pickup with professional drivers.
             </p>
             
             <div className="mission-list">
@@ -212,7 +212,7 @@ const AboutUs = ({ openBookingModal }) => {
       {/* Pillars Section */}
       <section className="section-padding pillars-section">
         <div className="container">
-          <h2 className="section-title text-center mb-12">The Pillars of ZI CAB</h2>
+          <h2 className="section-title text-center mb-12">The Pillars of OHO RIDE</h2>
           
           <div className="pillars-grid" data-reveal-stagger>
             {pillars.map((p, idx) => {

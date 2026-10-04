@@ -52,6 +52,32 @@ const getClientIp = (req) => {
   );
 };
 
+/**
+ * Can we actually tell one caller from another by IP?
+ *
+ * nginx in front of this API does not set X-Forwarded-For, so every request
+ * arrives from 127.0.0.1 and the per-IP buckets collapse into a single shared
+ * one. That turned "5 OTPs per 10 minutes per person" into five for the whole
+ * platform: the sixth customer to sign in anywhere in the country was refused,
+ * and the app reported it as "Unable to reach the server".
+ *
+ * Until nginx forwards the real address, a shared-looking IP is treated as no
+ * IP at all, and the per-phone limit does the work. Adding the header later
+ * costs nothing: real addresses simply start counting again.
+ */
+const isSharedProxyIp = (ip) => {
+  const value = String(ip || '').trim().toLowerCase().replace(/^::ffff:/, '');
+  if (!value || value === 'unknown') return true;
+  return (
+    value === '127.0.0.1' ||
+    value === '::1' ||
+    value === 'localhost' ||
+    value.startsWith('10.') ||
+    value.startsWith('192.168.') ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(value)
+  );
+};
+
 const resolveIdentifierParts = (req, mode = 'ip') => {
   const ip = getClientIp(req);
   const authId = toCleanString(req.auth?.sub);
@@ -205,7 +231,24 @@ export const createRateLimitMiddleware = ({
   return async (req, res, next) => {
     const outcomes = [];
 
-    for (const currentMode of normalizedModes) {
+    const clientIp = getClientIp(req);
+    const ipIsUseless = isSharedProxyIp(clientIp);
+
+    for (const rawMode of normalizedModes) {
+      let currentMode = rawMode;
+
+      if (currentMode === 'ip' && ipIsUseless) {
+        if (req.auth?.sub) {
+          // Signed-in caller: count them individually instead.
+          currentMode = 'auth_or_ip';
+        } else if (normalizedModes.length > 1) {
+          // Another mode (phone, email) already identifies this caller, and a
+          // bucket keyed on an indistinguishable IP would punish everyone for
+          // one another's requests.
+          continue;
+        }
+      }
+
       const key = buildRateLimitKey(req, scope, currentMode);
       outcomes.push(await consumeRateLimitKey({
         key,

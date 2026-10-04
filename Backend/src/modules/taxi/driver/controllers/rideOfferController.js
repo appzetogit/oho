@@ -2,6 +2,12 @@ import { asyncHandler } from '../../../../utils/asyncHandler.js';
 import { Ride } from '../../user/models/Ride.js';
 import { RIDE_STATUS } from '../../constants/index.js';
 import { resolveTransportDispatchConfig } from '../../services/transportSettingsService.js';
+import {
+  getSocketServer,
+  markDriverRejectedFromDispatch,
+  notifyRideAccepted,
+} from '../../services/dispatchService.js';
+import { acceptRideAssignment, getRideRoom } from '../../services/rideService.js';
 
 /**
  * Offers this driver was dispatched but has not answered yet.
@@ -99,4 +105,33 @@ export const getPendingRideOffers = asyncHandler(async (req, res) => {
 
   // Keyed `offers` to match what the driver app reads.
   ok(res, { offers });
+});
+
+/**
+ * Answers from the full-screen offer card, which posts straight from native
+ * code so they work with the app closed (no socket, no Dart engine). These
+ * routes did not exist, so every card answer was a 404: a "Decline" never
+ * reached dispatch and the ride stayed parked on that driver.
+ */
+export const rejectRideOffer = asyncHandler(async (req, res) => {
+  const rideId = String(req.params.rideId || '');
+  await markDriverRejectedFromDispatch(rideId, req.auth.sub);
+  getSocketServer()?.to(getRideRoom(rideId)).emit('driverRejectedRide', {
+    rideId,
+    driverId: req.auth.sub,
+  });
+  ok(res, { rideId });
+});
+
+export const acceptRideOffer = asyncHandler(async (req, res) => {
+  // Same service the socket `acceptRide` uses: first accept wins, later ones
+  // get a 409 the card logs and the app recovers from on open.
+  const ride = await acceptRideAssignment({ rideId: req.params.rideId, driverId: req.auth.sub });
+  await notifyRideAccepted(ride);
+  ok(res, {
+    rideId: String(ride._id),
+    status: ride.status,
+    liveStatus: ride.liveStatus,
+    acceptedAt: ride.acceptedAt,
+  });
 });

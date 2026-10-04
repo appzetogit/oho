@@ -74,7 +74,7 @@ const BookingModal = ({ isOpen, onClose, selectedVehicle = null }) => {
         {/* Header */}
         <div className="modal-header">
           <div className="modal-title-group">
-            <span className="modal-badge">ZI CAB Dispatch</span>
+            <span className="modal-badge">OHO RIDE Dispatch</span>
             <h3 className="modal-title">
               {step === 1 && 'Plan Your Ride'}
               {step === 2 && 'Passenger Details'}
@@ -223,8 +223,8 @@ const BookingModal = ({ isOpen, onClose, selectedVehicle = null }) => {
             )}
 
             <div className="security-notice">
-              <Shield size={16} color="#00BBA9" />
-              <span>Zero cancellation fee • Pay directly to driver or via UPI after trip</span>
+              <Shield size={16} color="#D90429" />
+              <span>Zero cancellation fee • Verified Captains • Pay directly via UPI / Cash</span>
             </div>
 
             <div className="modal-footer row-btns">
@@ -235,8 +235,8 @@ const BookingModal = ({ isOpen, onClose, selectedVehicle = null }) => {
               >
                 Back
               </button>
-              <button type="submit" className="btn btn-teal flex-1" disabled={submitting}>
-                {submitting ? 'Sending…' : 'Confirm Cab Booking'}
+              <button type="submit" className="btn btn-red flex-1" disabled={submitting}>
+                {submitting ? 'Sending…' : 'Confirm OHO Ride'}
               </button>
             </div>
           </form>
@@ -246,18 +246,18 @@ const BookingModal = ({ isOpen, onClose, selectedVehicle = null }) => {
         {step === 3 && (
           <div className="modal-body text-center py-6">
             <div className="success-icon-box">
-              <CheckCircle2 size={56} color="#00BBA9" />
+              <CheckCircle2 size={56} color="#D90429" />
             </div>
-            <h4 className="confirm-title">Cab Booked Successfully!</h4>
+            <h4 className="confirm-title">OHO Ride Requested!</h4>
             <p className="confirm-text">
-              Thank you, <strong>{name || 'Rider'}</strong>. Your request reference is <strong>{requestId || 'pending'}</strong>.
+              Thank you, <strong>{name || 'Rider'}</strong>. Your booking reference is <strong>{requestId || 'pending'}</strong>.
             </p>
             <div className="driver-assign-card">
-              <p>📍 Our team will call you shortly to confirm the driver and fare.</p>
+              <p>📍 Our OHO team is dispatching the nearest verified captain.</p>
               <p>📞 24x7 Toll-Free Support: {CONTACT.tollFree}</p>
             </div>
 
-            <button className="btn btn-teal w-full mt-6" onClick={handleReset}>
+            <button className="btn btn-red w-full mt-6" onClick={handleReset}>
               Done & Return to Homepage
             </button>
           </div>
@@ -265,14 +265,13 @@ const BookingModal = ({ isOpen, onClose, selectedVehicle = null }) => {
       </div>
 
       <style>{`
-        .zicab-landing {
           .modal-overlay {
             position: fixed;
             top: 0;
             left: 0;
             right: 0;
             bottom: 0;
-            background-color: rgba(7, 21, 43, 0.85);
+            background-color: rgba(7, 9, 15, 0.88);
             backdrop-filter: blur(8px);
             display: flex;
             align-items: center;
@@ -282,70 +281,57 @@ const BookingModal = ({ isOpen, onClose, selectedVehicle = null }) => {
           }
 
           .modal-card {
-            background-color: #0C1B30;
-            border: 1px solid rgba(0, 187, 169, 0.3);
+            background-color: #0F141F;
+            border: 1px solid rgba(217, 4, 41, 0.35);
             border-radius: 16px;
             width: 100%;
             max-width: 540px;
             box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
             overflow: hidden;
             color: #FFFFFF;
-            /* Cap to the viewport and let the body scroll — the step 1 form is
-               taller than a phone screen (and than a short laptop window). */
             max-height: calc(100vh - 40px);
             display: flex;
             flex-direction: column;
           }
 
           .modal-header {
-            flex-shrink: 0;
-          }
-
-          .modal-body {
-            overflow-y: auto;
-          }
-
-          .modal-header {
             display: flex;
             justify-content: space-between;
-            align-items: flex-start;
-            padding: 20px 24px;
+            align-items: center;
+            padding: 18px 24px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-            background-color: #07152B;
-          }
-
-          .modal-badge {
-            display: inline-block;
-            font-size: 11px;
-            font-weight: 600;
-            color: #00BBA9;
-            background: rgba(0, 187, 169, 0.12);
-            padding: 2px 8px;
-            border-radius: 4px;
-            margin-bottom: 4px;
-            text-transform: uppercase;
           }
 
           .modal-title {
-            font-size: 20px;
+            font-size: 19px;
             font-weight: 700;
             color: #FFFFFF;
-            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
           }
 
           .modal-close-btn {
             background: none;
             border: none;
+            color: #94A3B8;
             cursor: pointer;
             padding: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             border-radius: 6px;
+            transition: all 0.2s;
           }
+
           .modal-close-btn:hover {
-            background: rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.08);
+            color: #FFFFFF;
           }
 
           .modal-body {
             padding: 24px;
+            overflow-y: auto;
             display: flex;
             flex-direction: column;
             gap: 16px;
@@ -373,7 +359,7 @@ const BookingModal = ({ isOpen, onClose, selectedVehicle = null }) => {
           }
 
           .tab-pill.active {
-            background-color: #00BBA9;
+            background-color: #D90429;
             color: #FFFFFF;
             font-weight: 600;
           }
@@ -410,12 +396,12 @@ const BookingModal = ({ isOpen, onClose, selectedVehicle = null }) => {
           }
 
           .vehicle-card-item:hover {
-            border-color: rgba(0, 187, 169, 0.5);
+            border-color: rgba(217, 4, 41, 0.5);
           }
 
           .vehicle-card-item.selected {
-            border-color: #00BBA9;
-            background: rgba(0, 187, 169, 0.12);
+            border-color: #D90429;
+            background: rgba(217, 4, 41, 0.12);
           }
 
           .v-item-header {
@@ -431,7 +417,7 @@ const BookingModal = ({ isOpen, onClose, selectedVehicle = null }) => {
           }
 
           .v-rate {
-            color: #00BBA9;
+            color: #D90429;
           }
 
           .v-item-sub {
@@ -525,8 +511,8 @@ const BookingModal = ({ isOpen, onClose, selectedVehicle = null }) => {
           }
 
           .driver-assign-card {
-            background: rgba(0, 187, 169, 0.08);
-            border: 1px solid rgba(0, 187, 169, 0.2);
+            background: rgba(217, 4, 41, 0.08);
+            border: 1px solid rgba(217, 4, 41, 0.25);
             border-radius: 10px;
             padding: 14px;
             margin-top: 14px;

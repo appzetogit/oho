@@ -29,10 +29,10 @@ const Driver = () => {
     <div className="driver-page animate-fade-in" ref={pageRef}>
       <div className="page-hero">
         <div className="container">
-          <span className="page-tag">Join ZI CAB Captains</span>
+          <span className="page-tag">Join OHO RIDE Captains</span>
           <h1 className="page-title">Drive With Dignity, Security & Higher Income</h1>
           <p className="page-subtitle">
-            Become a ZI CAB Driver Partner. Enjoy daily/weekly settlements, zero arbitrary account blocks, and dedicated support for captains.
+            Become an OHO RIDE Driver Partner. Enjoy daily/weekly settlements, zero arbitrary account blocks, and dedicated support for captains.
           </p>
         </div>
       </div>
@@ -41,11 +41,11 @@ const Driver = () => {
         <div className="container driver-grid">
           {/* Left Details */}
           <div className="driver-info">
-            <h2 className="section-title">Captain Benefits at ZI CAB</h2>
+            <h2 className="section-title">Captain Benefits at OHO RIDE</h2>
             
             <div className="driver-perks" data-reveal-stagger>
               <div className="d-perk">
-                <Clock size={24} color="#00BBA9" />
+                <Clock size={24} color="#D90429" />
                 <div>
                   <h4>Flexible Shift Timings</h4>
                   <p>Choose your own operating hours. Drive outstation long trips or local airport runs whenever you wish.</p>
@@ -53,15 +53,15 @@ const Driver = () => {
               </div>
 
               <div className="d-perk">
-                <Shield size={24} color="#00BBA9" />
+                <Shield size={24} color="#D90429" />
                 <div>
                   <h4>₹5 Lakh Insurance Cover</h4>
-                  <p>Free accidental insurance and medical assistance for every active ZI CAB driver partner.</p>
+                  <p>Free accidental insurance and medical assistance for every active OHO RIDE driver partner.</p>
                 </div>
               </div>
 
               <div className="d-perk">
-                <Award size={24} color="#00BBA9" />
+                <Award size={24} color="#D90429" />
                 <div>
                   <h4>Zero Dry-Run Guarantee</h4>
                   <p>Outstation trips are optimized with return bookings to save fuel and maximize profit per trip.</p>
@@ -70,11 +70,11 @@ const Driver = () => {
             </div>
 
             <div className="docs-box mt-8">
-              <h3 className="docs-title"><FileText size={18} color="#00BBA9" /> Documents Required for Verification</h3>
+              <h3 className="docs-title"><FileText size={18} color="#D90429" /> Documents Required for Verification</h3>
               <div className="docs-list">
                 {requiredDocs.map((doc, idx) => (
                   <div key={idx} className="doc-item">
-                    <CheckCircle2 size={16} color="#00BBA9" />
+                    <CheckCircle2 size={16} color="#D90429" />
                     <span>{doc}</span>
                   </div>
                 ))}
@@ -85,11 +85,11 @@ const Driver = () => {
           {/* Right Driver Onboarding Form */}
           <div className="driver-form-card" data-reveal>
             <h3 className="form-card-title">Driver Onboarding Form</h3>
-            <p className="form-card-sub">Start driving with ZI CAB within 24 hours.</p>
+            <p className="form-card-sub">Start driving with OHO RIDE within 24 hours.</p>
 
             {submitted ? (
               <div className="form-success text-center py-6">
-                <CheckCircle2 size={50} color="#00BBA9" className="mx-auto mb-4" />
+                <CheckCircle2 size={50} color="#D90429" className="mx-auto mb-4" />
                 <h4 className="text-xl font-bold text-white mb-2">Registration Submitted!</h4>
                 <p className="text-gray-300 text-sm">
                   Our Driver Onboarding Center will call <strong>{phone}</strong> to schedule document verification.

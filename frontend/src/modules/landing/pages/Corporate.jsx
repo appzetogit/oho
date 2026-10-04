@@ -45,7 +45,7 @@ const Corporate = () => {
     <div className="corporate-page animate-fade-in" ref={pageRef}>
       <div className="page-hero">
         <div className="container">
-          <span className="page-tag">ZI CAB Business</span>
+          <span className="page-tag">OHO RIDE Business</span>
           <h1 className="page-title">Enterprise Mobility & Corporate Cab Solutions</h1>
           <p className="page-subtitle">
             Streamline business travel, airport transfers, and employee commuting with India's most dependable corporate cab network.
@@ -57,9 +57,9 @@ const Corporate = () => {
         <div className="container corp-grid">
           {/* Left Info */}
           <div className="corp-info">
-            <h2 className="section-title">Why 200+ Enterprises Choose ZI CAB</h2>
+            <h2 className="section-title">Why 200+ Enterprises Choose OHO RIDE</h2>
             <p className="body-text">
-              Managing corporate travel expenses and ensuring employee safety can be challenging. ZI CAB simplifies B2B travel with automated booking tools, zero surge pricing, and customized billing contracts.
+              Managing corporate travel expenses and ensuring employee safety can be challenging. OHO RIDE simplifies B2B travel with automated booking tools, zero surge pricing, and customized billing contracts.
             </p>
 
             <div className="benefits-column">

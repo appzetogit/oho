@@ -1,3 +1,4 @@
 # Exported legacy MySQL rows — real customer data, never commit.
 _data/
-_report.txt
+_report*.txt
+_counts.json

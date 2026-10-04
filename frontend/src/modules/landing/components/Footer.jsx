@@ -16,28 +16,28 @@ const Footer = ({ setActiveTab }) => {
           {/* Brand Info */}
           <div className="footer-brand">
             <div className="footer-logo">
-              <img src="/zicab-logo.jpg" alt="ZI CAB" className="footer-logo-img" />
+              <img src="/oho-logo.jpg" alt="OHO RIDE" className="footer-logo-img" />
               <div>
                 <div className="footer-logo-text">
-                  <span className="logo-zi">ZI</span>
-                  <span className="logo-cab">CAB</span>
+                  <span className="logo-oho">OHO</span>
+                  <span className="logo-ride">RIDE</span>
                 </div>
-                <p className="footer-tagline">Your Ride. Our Priority.</p>
+                <p className="footer-tagline">Fast. Reliable. Safe.</p>
               </div>
             </div>
             <p className="footer-desc">
-              ZI CAB is a premium cab booking platform providing safe, transparent, and 24x7 verified rides — now live in Bengaluru, Mangaluru and Hubballi.
+              OHO RIDE is India's premier ride-booking platform providing safe, fast, and transparent rides with verified captains, zero cancellation worries, and 24x7 safety support.
             </p>
 
             <div className="footer-contacts">
               <div className="contact-item">
-                <Phone size={16} color="#00BBA9" />
+                <Phone size={16} color="#D90429" />
                 <span>
                   24x7 Toll-Free: <strong>{CONTACT.tollFree}</strong>
                 </span>
               </div>
               <div className="contact-item">
-                <MessageCircle size={16} color="#00BBA9" />
+                <MessageCircle size={16} color="#D90429" />
                 <span>
                   WhatsApp:{' '}
                   <a href={waLink()} target="_blank" rel="noreferrer" className="footer-inline-link">
@@ -46,7 +46,7 @@ const Footer = ({ setActiveTab }) => {
                 </span>
               </div>
               <div className="contact-item">
-                <Mail size={16} color="#00BBA9" />
+                <Mail size={16} color="#D90429" />
                 <span>
                   Email:{' '}
                   <a href={`mailto:${CONTACT.email}`} className="footer-inline-link">
@@ -55,7 +55,7 @@ const Footer = ({ setActiveTab }) => {
                 </span>
               </div>
               <div className="contact-item">
-                <MapPin size={16} color="#00BBA9" />
+                <MapPin size={16} color="#D90429" />
                 <span>Office: {CONTACT.address}</span>
               </div>
             </div>
@@ -68,34 +68,31 @@ const Footer = ({ setActiveTab }) => {
               <li><button onClick={() => handleNavClick('home')}>Home</button></li>
               <li><button onClick={() => handleNavClick('about')}>About Us</button></li>
               <li><button onClick={() => handleNavClick('services')}>Our Services</button></li>
-              <li><button onClick={() => handleNavClick('corporate')}>Corporate Travel</button></li>
-              <li><button onClick={() => handleNavClick('partner')}>Partner With Us</button></li>
-              <li><button onClick={() => handleNavClick('driver')}>Attach Driver/Cab</button></li>
-              <li><button onClick={() => handleNavClick('advertise')}>Advertise with ZI CAB</button></li>
-              <li><button onClick={() => handleNavClick('contact')}>Contact Us</button></li>
+              <li><button onClick={() => handleNavClick('corporate')}>Corporate Cabs</button></li>
+              <li><button onClick={() => handleNavClick('partner')}>Attach Your Fleet</button></li>
+              <li><button onClick={() => handleNavClick('driver')}>Drive with OHO</button></li>
+              <li><button onClick={() => handleNavClick('contact')}>Contact Support</button></li>
             </ul>
           </div>
 
-          {/* Our Services */}
+          {/* Services */}
           <div className="footer-col">
-            <h4 className="footer-heading">Cab Services</h4>
+            <h4 className="footer-heading">Ride Categories</h4>
             <ul className="footer-links">
-              <li><button onClick={() => handleNavClick('services')}>Auto Ride</button></li>
-              <li><button onClick={() => handleNavClick('services')}>City Ride (Local Cabs)</button></li>
-              <li><button onClick={() => handleNavClick('services')}>Airport Pickup & Drop</button></li>
-              <li><button onClick={() => handleNavClick('services')}>Outstation One-Way & Roundtrip</button></li>
-              <li><button onClick={() => handleNavClick('services')}>Premium Executive Sedans</button></li>
-              <li><button onClick={() => handleNavClick('services')}>SUV & Innova Crysta</button></li>
-              <li><button onClick={() => handleNavClick('services')}>Hotel & Mall Pickup</button></li>
+              <li><button onClick={() => handleNavClick('services')}>OHO Daily City Cabs</button></li>
+              <li><button onClick={() => handleNavClick('services')}>OHO Auto Rickshaw</button></li>
+              <li><button onClick={() => handleNavClick('services')}>Airport Express Pickup</button></li>
+              <li><button onClick={() => handleNavClick('services')}>Outstation One-Way & Round</button></li>
+              <li><button onClick={() => handleNavClick('services')}>Hourly Car Rentals</button></li>
+              <li><button onClick={() => handleNavClick('services')}>Luxury Sedans & SUVs</button></li>
             </ul>
           </div>
 
-          {/* Mobile App & Safety */}
+          {/* Apps & Trust */}
           <div className="footer-col">
-            <h4 className="footer-heading">Download App</h4>
-            <p className="footer-text-sm">
-              Book rides in seconds, track drivers live, and manage invoices with the ZI CAB app.
-            </p>
+            <h4 className="footer-heading">Get The OHO App</h4>
+            <p className="footer-app-desc">Book in seconds, track in real-time, pay cashless.</p>
+            
             <div className="footer-app-badges">
               <div className="app-badge">
                 <span className="app-badge-title">GET IT ON</span>
@@ -109,11 +106,11 @@ const Footer = ({ setActiveTab }) => {
 
             <div className="footer-trust-mini">
               <div className="trust-pill">
-                <ShieldCheck size={14} color="#00BBA9" />
-                <span>Verified Drivers</span>
+                <ShieldCheck size={14} color="#D90429" />
+                <span>Verified Captains</span>
               </div>
               <div className="trust-pill">
-                <Clock size={14} color="#00BBA9" />
+                <Clock size={14} color="#D90429" />
                 <span>24x7 Live SOS</span>
               </div>
             </div>
@@ -124,13 +121,13 @@ const Footer = ({ setActiveTab }) => {
           <span className="footer-cities-label">Now Live In:</span>
           {LAUNCH_CITIES.map((c) => (
             <span key={c.name} className="footer-city-pill">
-              <MapPin size={12} color="#00BBA9" /> {c.name}
+              <MapPin size={12} color="#D90429" /> {c.name}
             </span>
           ))}
         </div>
 
         <div className="footer-bottom">
-          <p>© 2026 ZI CAB Technologies Pvt Ltd. All Rights Reserved.</p>
+          <p>© 2026 OHO RIDE Technologies Pvt Ltd. All Rights Reserved.</p>
           <div className="footer-bottom-links">
             <a href="#privacy">Privacy Policy</a>
             <span>•</span>
@@ -138,8 +135,6 @@ const Footer = ({ setActiveTab }) => {
             <span>•</span>
             <a href="#refund">Refund & Cancellation</a>
             <span>•</span>
-            {/* Required credit for the Creative Commons vehicle photos.
-                Safe to delete once they are replaced with ZI CAB's own fleet photos. */}
             <a href="/vehicles/ATTRIBUTION.md" target="_blank" rel="noreferrer">Photo Credits</a>
           </div>
         </div>
@@ -148,7 +143,7 @@ const Footer = ({ setActiveTab }) => {
       <style>{`
         .zicab-landing {
           .footer-container {
-            background-color: #07152B;
+            background-color: #07090F;
             color: #94A3B8;
             padding-top: 60px;
             padding-bottom: 24px;
@@ -171,10 +166,11 @@ const Footer = ({ setActiveTab }) => {
           }
 
           .footer-logo-img {
-            width: 54px;
-            height: 54px;
-            border-radius: 13px;
+            width: 50px;
+            height: 50px;
+            border-radius: 12px;
             object-fit: cover;
+            border: 1px solid rgba(217, 4, 41, 0.35);
           }
 
           .footer-logo-text {
@@ -183,7 +179,7 @@ const Footer = ({ setActiveTab }) => {
           }
 
           .footer-inline-link:hover {
-            color: #00BBA9;
+            color: #FF4D6D;
           }
 
           .footer-cities {
@@ -204,8 +200,8 @@ const Footer = ({ setActiveTab }) => {
             display: inline-flex;
             align-items: center;
             gap: 5px;
-            background: rgba(0, 187, 169, 0.1);
-            border: 1px solid rgba(0, 187, 169, 0.3);
+            background: rgba(217, 4, 41, 0.08);
+            border: 1px solid rgba(217, 4, 41, 0.25);
             color: #CBD5E1;
             font-size: 12.5px;
             font-weight: 500;
@@ -213,24 +209,25 @@ const Footer = ({ setActiveTab }) => {
             border-radius: 20px;
           }
 
-          .footer-logo .logo-zi {
-            font-size: 28px;
-            font-weight: 800;
+          .footer-logo .logo-oho {
+            font-size: 26px;
+            font-weight: 900;
             color: #FFFFFF;
-            font-style: italic;
           }
 
-          .footer-logo .logo-cab {
+          .footer-logo .logo-ride {
             font-size: 24px;
             font-weight: 800;
-            color: #00BBA9;
+            color: #D90429;
             margin-left: 4px;
           }
 
           .footer-tagline {
-            color: #00BBA9;
-            font-size: 12.5px;
-            font-weight: 500;
+            color: #D90429;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
           }
 
           .footer-desc {

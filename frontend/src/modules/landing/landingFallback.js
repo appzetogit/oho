@@ -66,7 +66,7 @@ export const LANDING_FALLBACK = {
   ],
 
   contact: {
-    email: 'support@zicab.in',
+    email: 'support@ohoride.in',
     whatsapp: '919876500000',
     whatsappDisplay: '+91 98765 00000',
     tollFree: '1800 200 9999',
