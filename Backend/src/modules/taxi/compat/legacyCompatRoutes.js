@@ -69,6 +69,25 @@ const tenDigits = (value) => {
   return digits.length > 10 ? digits.slice(-10) : digits;
 };
 
+/**
+ * Take the phone number whatever the app calls it.
+ *
+ * Laravel read `mobile`, and so did this compat layer, but the current rider
+ * app posts `phone`. That mismatch answered a perfectly good sign-in with
+ * "A valid 10-digit phone number is required", which the app reports to the
+ * customer as "Unable to reach the server" — the server looked down while it
+ * was simply reading a field the app no longer sends.
+ */
+const phoneFromBody = (body = {}) =>
+  tenDigits(
+    body.mobile ??
+    body.phone ??
+    body.mobile_number ??
+    body.phone_number ??
+    body.mobileNumber ??
+    body.phoneNumber,
+  );
+
 const flag = (value) => (['1', 1, true, 'true', 'on'].includes(value) ? '1' : '0');
 
 /**
@@ -188,7 +207,7 @@ legacyCompatRouter.post(
   '/mobile-otp',
   otpSendRateLimit,
   asyncHandler(async (req, res) => {
-    const phone = tenDigits(req.body?.mobile);
+    const phone = phoneFromBody(req.body);
     const role = String(req.body?.role || '').trim().toLowerCase();
     if (DRIVER_LOGIN_ROLES.includes(role)) await startDriverLoginOtp({ phone, role });
     else await startUserOtp({ phone });
@@ -202,7 +221,7 @@ legacyCompatRouter.post(
   '/validate-otp',
   otpVerifyRateLimit,
   asyncHandler(async (req, res) => {
-    const phone = tenDigits(req.body?.mobile);
+    const phone = phoneFromBody(req.body);
     const otp = String(req.body?.otp || '').trim();
     const role = String(req.body?.role || '').trim().toLowerCase();
     if (!phone || !otp) return invalid(res, 'mobile and otp are required');
@@ -235,7 +254,7 @@ legacyCompatRouter.post(
  */
 const validateMobileForLogin = (kind) =>
   asyncHandler(async (req, res) => {
-    const phone = tenDigits(req.body?.mobile);
+    const phone = phoneFromBody(req.body);
     const email = String(req.body?.email || '').trim().toLowerCase();
     const role = String(req.body?.role || kind).trim().toLowerCase();
 
@@ -380,11 +399,17 @@ legacyCompatRouter.get(
   }),
 );
 
-// GET /users/banners — no contract anywhere; the active promotional banners.
-legacyCompatRouter.get(
-  '/users/banners',
+// GET /users/banners and /drivers/banners — the active promotional banners for
+// each app. A banner with no audience predates driver banners, so it is
+// treated as rider-only.
+const listBannersFor = (audience) =>
   asyncHandler(async (_req, res) => {
-    const rows = await Banner.find({ active: { $in: [true, 1] } }).sort({ createdAt: -1 }).lean();
+    const audienceFilter = audience === 'driver'
+      ? { audience: { $in: ['driver', 'both'] } }
+      : { $or: [{ audience: { $in: ['user', 'both'] } }, { audience: { $exists: false } }] };
+    const rows = await Banner.find({ active: { $in: [true, 1] }, ...audienceFilter })
+      .sort({ createdAt: -1 })
+      .lean();
     return ok(
       res,
       rows.map((b) => ({
@@ -398,8 +423,10 @@ legacyCompatRouter.get(
       })),
       'banners_listed',
     );
-  }),
-);
+  });
+
+legacyCompatRouter.get('/users/banners', listBannersFor('user'));
+legacyCompatRouter.get('/drivers/banners', listBannersFor('driver'));
 
 // GET /common/mobile/terms and /common/mobile/privacy — Laravel
 // LandingQuickLinkController, which served HTML for an in-app web view. Same

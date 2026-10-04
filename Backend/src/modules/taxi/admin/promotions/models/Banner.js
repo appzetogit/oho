@@ -39,6 +39,14 @@ const bannerSchema = new mongoose.Schema(
       default: true,
       index: true,
     },
+    // Which app shows the banner. Existing banners predate the driver app
+    // showing any, so they default to the rider app only.
+    audience: {
+      type: String,
+      enum: ['user', 'driver', 'both'],
+      default: 'user',
+      index: true,
+    },
     push_count: {
       type: Number,
       default: 0,

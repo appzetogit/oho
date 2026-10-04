@@ -17,10 +17,24 @@ const Motion = motion;
 const LIST_PATH = '/admin/promotions/banner-image';
 const CREATE_PATH = '/admin/promotions/banner-image/create';
 
+const AUDIENCE_OPTIONS = [
+  { value: 'user', label: 'User App' },
+  { value: 'driver', label: 'Driver App' },
+  { value: 'both', label: 'Both Apps' },
+];
+
+const audienceLabel = (audience) =>
+  AUDIENCE_OPTIONS.find((option) => option.value === audience)?.label || 'User App';
+
+// The rider app's home strip reads these synced promos, so driver-only
+// banners must stay out of it.
+const showsInUserApp = (banner) => (banner.audience || 'user') !== 'driver';
+
 const createInitialFormData = () => ({
   image: null,
   image_url: '',
   use_url: false,
+  audience: 'user',
 });
 
 const BannerImage = () => {
@@ -57,7 +71,7 @@ const BannerImage = () => {
       const homeData = await homeRes.json();
       const currentSettings = homeData.settings || {};
 
-      const nextPromos = bannersList.map((b, idx) => ({
+      const nextPromos = bannersList.filter(showsInUserApp).map((b, idx) => ({
         id: b._id || b.id || String(idx + 1),
         title: b.title || 'Experience A New Standard With Appzeto',
         subtitle: b.subtitle || 'A premier private hire service where luxury and reliability converge.',
@@ -184,6 +198,7 @@ const BannerImage = () => {
         image: imageData,
         image_url: formData.image_url.trim(),
         use_url: formData.use_url,
+        audience: formData.audience,
       };
 
       const res = await fetch(`${baseUrl}/banners`, {
@@ -314,6 +329,7 @@ const BannerImage = () => {
                   <thead className="bg-gray-50">
                     <tr className="text-[13px] font-bold text-gray-700">
                       <th className="px-6 py-4">Icon</th>
+                      <th className="px-6 py-4">Show In</th>
                       <th className="px-6 py-4">Status</th>
                       <th className="px-6 py-4">Action</th>
                     </tr>
@@ -321,13 +337,13 @@ const BannerImage = () => {
                   <tbody className="divide-y divide-gray-100">
                     {loading ? (
                       <tr>
-                        <td colSpan="3" className="px-6 py-14 text-center text-sm text-gray-400">
+                        <td colSpan="4" className="px-6 py-14 text-center text-sm text-gray-400">
                           Loading banners...
                         </td>
                       </tr>
                     ) : rows.length === 0 ? (
                       <tr>
-                        <td colSpan="3" className="px-6 py-14 text-center text-sm text-gray-400">
+                        <td colSpan="4" className="px-6 py-14 text-center text-sm text-gray-400">
                           No banners found.
                         </td>
                       </tr>
@@ -348,6 +364,19 @@ const BannerImage = () => {
                                 </div>
                               )}
                             </div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <span
+                              className={`inline-flex rounded px-2.5 py-1 text-[11px] font-bold uppercase ${
+                                item.audience === 'driver'
+                                  ? 'bg-amber-50 text-amber-700'
+                                  : item.audience === 'both'
+                                    ? 'bg-indigo-50 text-indigo-700'
+                                    : 'bg-sky-50 text-sky-700'
+                              }`}
+                            >
+                              {audienceLabel(item.audience)}
+                            </span>
                           </td>
                           <td className="px-6 py-4">
                             <button
@@ -404,6 +433,34 @@ const BannerImage = () => {
             className="bg-white rounded-[22px] border border-gray-200 shadow-sm p-8"
           >
             <div className="space-y-6 max-w-3xl">
+              <div>
+                <label className="block text-[14px] font-semibold text-gray-900 mb-3">
+                  Show In<span className="text-rose-500">*</span>
+                </label>
+                <div className="flex flex-wrap gap-3">
+                  {AUDIENCE_OPTIONS.map((option) => (
+                    <label
+                      key={option.value}
+                      className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors ${
+                        formData.audience === option.value
+                          ? 'border-[#2D3A6E] bg-[#2D3A6E]/5 text-[#2D3A6E]'
+                          : 'border-gray-200 text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="audience"
+                        value={option.value}
+                        checked={formData.audience === option.value}
+                        onChange={() => setFormData((current) => ({ ...current, audience: option.value }))}
+                        className="text-[#2D3A6E] focus:ring-[#2D3A6E]"
+                      />
+                      {option.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
               <div>
                 <label className="block text-[14px] font-semibold text-gray-900 mb-3">
                   Banner Image<span className="text-rose-500">*</span>
