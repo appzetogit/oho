@@ -143,6 +143,7 @@ const serializeBanner = (item) => ({
   deep_link: item.deep_link || '',
   redirect_url: item.redirect_url || item.external_link || item.deep_link || '',
   active: item.active !== false,
+  audience: item.audience || 'user',
   push_count: Number(item.push_count || 0),
   last_pushed_at: item.last_pushed_at || null,
   createdAt: item.createdAt,
@@ -151,8 +152,11 @@ const serializeBanner = (item) => ({
 
 const serializeBannerMinimal = (item) => ({
   _id: item._id,
+  title: item.title || '',
   image: item.image || '',
+  redirect_url: item.redirect_url || item.external_link || item.deep_link || '',
   active: item.active !== false,
+  audience: item.audience || 'user',
 });
 
 const serializeBannerFromPayload = (item, payload = {}) => {
@@ -186,6 +190,7 @@ const serializeBannerFromPayload = (item, payload = {}) => {
   if (keys.has('redirect_url') || keys.has('target_route_url')) {
     response.redirect_url = item.redirect_url || item.external_link || item.deep_link || '';
   }
+  response.audience = item.audience || 'user';
 
   return response;
 };
@@ -370,6 +375,20 @@ const normalizeNotificationPayload = async (payload, existing = null) => {
   };
 };
 
+export const BANNER_AUDIENCES = ['user', 'driver', 'both'];
+
+const normalizeBannerAudience = (value, fallback = 'user') => {
+  const audience = String(value ?? '').trim().toLowerCase();
+  return BANNER_AUDIENCES.includes(audience) ? audience : fallback;
+};
+
+// Banners an app should show: its own audience plus 'both'. Banners saved
+// before the audience field existed have none and belong to the rider app.
+export const bannerAudienceQuery = (app) =>
+  app === 'user'
+    ? { audience: { $in: ['user', 'both', null] } }
+    : { audience: { $in: [app, 'both'] } };
+
 const normalizeBannerPayload = async (payload, existing = null) => {
   const generatedTitle = `Banner ${new Date().toISOString()}`;
   const title = normalizeText(payload.title ?? existing?.title ?? generatedTitle);
@@ -410,6 +429,7 @@ const normalizeBannerPayload = async (payload, existing = null) => {
     deep_link: linkType === 'deep_link' ? redirectUrl : '',
     redirect_url: redirectUrl,
     active,
+    audience: normalizeBannerAudience(payload.audience, existing?.audience || 'user'),
   };
 };
 
@@ -563,10 +583,13 @@ export const deleteNotification = async (id) => {
   return true;
 };
 
-export const listBanners = async ({ page = 1, limit = 50, active }) => {
+export const listBanners = async ({ page = 1, limit = 50, active, audience }) => {
   const query = {};
   if (active !== undefined) {
     query.active = normalizeBoolean(active);
+  }
+  if (BANNER_AUDIENCES.includes(audience)) {
+    Object.assign(query, bannerAudienceQuery(audience));
   }
 
   const safePage = Math.max(1, Number(page) || 1);
