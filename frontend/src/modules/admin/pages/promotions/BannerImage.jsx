@@ -443,9 +443,10 @@ const BannerImage = () => {
                       key={option.value}
                       className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors ${
                         formData.audience === option.value
-                          ? 'border-[#2D3A6E] bg-[#2D3A6E]/5 text-[#2D3A6E]'
+                          ? 'bg-indigo-50 text-[#2D3A6E]'
                           : 'border-gray-200 text-gray-700 hover:bg-gray-50'
                       }`}
+                      style={formData.audience === option.value ? { borderColor: '#2D3A6E' } : undefined}
                     >
                       <input
                         type="radio"
