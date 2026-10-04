@@ -131,3 +131,44 @@ export const getOrLoadCachedValue = async (
   inflightLoads.set(key, loadPromise);
   return loadPromise;
 };
+
+/// Writes a value with no read-through load, for callers that already hold the
+/// freshest copy and only need it readable elsewhere.
+export const setCachedValue = async (key, value, { ttlMs = 30_000 } = {}) => {
+  if (!key) {
+    throw new Error('setCachedValue requires key');
+  }
+
+  writeLocalEntry(key, value, ttlMs);
+
+  await runRedisCommand(
+    async (client) => client.pSetEx(key, Math.max(1, Number(ttlMs) || 1), serializeCachePayload(value)),
+    { label: `cache set ${key}` },
+  ).catch(() => null);
+
+  return value;
+};
+
+/// Reads without loading. Returns null on a miss rather than computing
+/// anything, so a caller can fall back to its own source of truth.
+export const readCachedValue = async (key) => {
+  if (!key) {
+    return null;
+  }
+
+  const localEntry = readLocalEntry(key);
+  if (localEntry) {
+    return localEntry.value;
+  }
+
+  const redisResult = await runRedisCommand(
+    async (client) => client.get(key),
+    { label: `cache read ${key}` },
+  );
+
+  if (redisResult.ok && typeof redisResult.value === 'string') {
+    return deserializeCachePayload(redisResult.value);
+  }
+
+  return null;
+};

@@ -33,6 +33,35 @@ const normalizeRole = (role = '') => {
   return value;
 };
 
+/**
+ * Stamp lastSeenAt for a driver, at most once a minute each.
+ *
+ * Drivers poll several endpoints while on duty, so writing on every request
+ * would be a lot of pointless database traffic. A minute is far finer than the
+ * staleness window the admin panel judges against, and the write is fire and
+ * forget: a failed heartbeat must never break the request it rode in on.
+ */
+const DRIVER_HEARTBEAT_INTERVAL_MS = 60 * 1000;
+const lastSeenWrites = new Map();
+
+const touchDriverLastSeen = (driverId) => {
+  const key = String(driverId);
+  const now = Date.now();
+  const previous = lastSeenWrites.get(key) || 0;
+  if (now - previous < DRIVER_HEARTBEAT_INTERVAL_MS) return;
+  lastSeenWrites.set(key, now);
+
+  // Keep the map from growing without bound on a long-lived worker.
+  if (lastSeenWrites.size > 5000) {
+    for (const [id, at] of lastSeenWrites) {
+      if (now - at > DRIVER_HEARTBEAT_INTERVAL_MS * 10) lastSeenWrites.delete(id);
+    }
+  }
+
+  Driver.updateOne({ _id: driverId }, { $set: { lastSeenAt: new Date(now) } })
+    .catch((error) => console.warn('[presence] could not record last seen:', error.message));
+};
+
 const attachResolvedAuth = (req, payload) => {
   req.auth = {
     sub: payload.sub,
@@ -70,6 +99,13 @@ export const authenticate = (allowedRoles = [], options = {}) => async (req, _re
 
     if (!entity) {
       throw new ApiError(401, 'Authenticated account no longer exists');
+    }
+
+    // Server-side sign-out. Reported as 'jwt expired' on purpose: that is the
+    // exact message the apps already treat as "session over, log in again",
+    // so a forced logout needs no app update.
+    if (entity.tokensValidAfter && Number(payload.iat) * 1000 < new Date(entity.tokensValidAfter).getTime()) {
+      throw new ApiError(401, 'jwt expired');
     }
 
     if (
@@ -145,6 +181,15 @@ export const authenticate = (allowedRoles = [], options = {}) => async (req, _re
 
     attachResolvedAuth(req, payload);
     req.auth.entity = entity;
+
+    // Remember that this driver's app spoke to us just now. Nothing else
+    // recorded it: isOnline was set when a driver went on duty and then never
+    // cleared, so 117 drivers who had not opened the app in weeks — some in
+    // months — still counted as online in God's Eye. With a timestamp, "online"
+    // can mean "said hello recently" instead of "once pressed a button".
+    if (normalizedRole === 'driver') {
+      touchDriverLastSeen(entity._id);
+    }
 
     if (normalizedRole === 'admin') {
       req.auth.admin = {

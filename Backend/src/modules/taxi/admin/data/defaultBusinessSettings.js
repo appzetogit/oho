@@ -25,6 +25,9 @@ export const createDefaultBusinessSettings = () => ({
     enable_outstation_round_trip: '1',
     show_incentive_feature_for_driver: '1',
     enable_driver_loyalty: '1',
+    // When off, drivers go online without capturing a daily selfie. Defaults on
+    // so existing installs keep the verification they already had.
+    enable_driver_online_selfie: '1',
     enable_country_restrict_on_map: '1',
     enable_owner_module: '1',
     show_ride_otp: '1',

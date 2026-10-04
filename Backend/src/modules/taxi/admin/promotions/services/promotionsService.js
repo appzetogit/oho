@@ -143,6 +143,7 @@ const serializeBanner = (item) => ({
   deep_link: item.deep_link || '',
   redirect_url: item.redirect_url || item.external_link || item.deep_link || '',
   active: item.active !== false,
+  audience: item.audience || 'user',
   push_count: Number(item.push_count || 0),
   last_pushed_at: item.last_pushed_at || null,
   createdAt: item.createdAt,
@@ -151,8 +152,11 @@ const serializeBanner = (item) => ({
 
 const serializeBannerMinimal = (item) => ({
   _id: item._id,
+  title: item.title || '',
   image: item.image || '',
+  redirect_url: item.redirect_url || item.external_link || item.deep_link || '',
   active: item.active !== false,
+  audience: item.audience || 'user',
 });
 
 const serializeBannerFromPayload = (item, payload = {}) => {
@@ -186,6 +190,7 @@ const serializeBannerFromPayload = (item, payload = {}) => {
   if (keys.has('redirect_url') || keys.has('target_route_url')) {
     response.redirect_url = item.redirect_url || item.external_link || item.deep_link || '';
   }
+  response.audience = item.audience || 'user';
 
   return response;
 };
@@ -410,6 +415,9 @@ const normalizeBannerPayload = async (payload, existing = null) => {
     deep_link: linkType === 'deep_link' ? redirectUrl : '',
     redirect_url: redirectUrl,
     active,
+    audience: ['user', 'driver', 'both'].includes(String(payload.audience ?? existing?.audience ?? 'user').trim().toLowerCase())
+      ? String(payload.audience ?? existing?.audience ?? 'user').trim().toLowerCase()
+      : 'user',
   };
 };
 

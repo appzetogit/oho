@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { ApiError } from '../../../../utils/ApiError.js';
+import { CancellationReason } from '../../admin/models/CancellationReason.js';
 import { normalizePoint } from '../../../../utils/geo.js';
 import { resolveConfiguredGatewayCredentials } from '../../services/paymentGatewayService.js';
 import { Driver } from '../../driver/models/Driver.js';
@@ -16,6 +17,7 @@ import {
   getRideDetails,
   getRideRoom,
   increaseRideBidCeiling,
+  enableRideFareIncrease,
   listRideBidsForUser,
   listRideHistoryForIdentity,
   serializeRideRealtime,
@@ -413,6 +415,7 @@ export const updateRideStatus = async (req, res) => {
     driverId: req.auth.sub,
     nextStatus,
     paymentMethod: req.body.paymentMethod,
+    otp: req.body.otp,
   });
 
   try {
@@ -980,9 +983,32 @@ export const getRideAppTipSettings = async (_req, res) => {
 };
 
 export const cancelRide = async (req, res) => {
+  const { reasonId, note } = req.body || {};
+
+  // The label is taken from the catalog rather than the request body, so what
+  // is stored is a reason the admin actually offers and cannot be spoofed into
+  // the ride record. An unrecognised id is ignored instead of rejected — a
+  // rider must always be able to cancel.
+  let reason = '';
+  let resolvedReasonId = null;
+  if (reasonId && mongoose.isValidObjectId(reasonId)) {
+    const catalogEntry = await CancellationReason.findOne({
+      _id: reasonId,
+      audience: 'user',
+      active: true,
+    }).lean();
+    if (catalogEntry) {
+      reason = catalogEntry.title;
+      resolvedReasonId = catalogEntry._id;
+    }
+  }
+
   const ride = await cancelRideByUser({
     rideId: req.params.rideId,
     userId: req.auth.sub,
+    reason,
+    reasonId: resolvedReasonId,
+    note: String(note || '').slice(0, 500),
   });
 
   if (!ride) {
@@ -1005,11 +1031,10 @@ export const listAvailableDrivers = async (req, res) => {
   const longitude = Number(lng);
   const distance = Number(maxDistance);
 
-  if (!vehicleTypeId) {
-    throw new ApiError(400, 'vehicleTypeId is required');
-  }
-
-  if (!mongoose.Types.ObjectId.isValid(vehicleTypeId)) {
+  // Optional: without it this answers "every online driver around this
+  // point", which is what the rider app's map of nearby vehicles asks for.
+  // Requiring it made that map permanently empty, since it has no single type.
+  if (vehicleTypeId && !mongoose.Types.ObjectId.isValid(vehicleTypeId)) {
     throw new ApiError(400, 'vehicleTypeId is invalid');
   }
 
@@ -1025,7 +1050,7 @@ export const listAvailableDrivers = async (req, res) => {
   const matchOptions = {
     maxDistance: Number.isFinite(distance) && distance > 0 ? Math.min(distance, 25000) : 25000,
     limit: Math.min(Number(limit) || 30, 50),
-    vehicleTypeId,
+    ...(vehicleTypeId ? { vehicleTypeId } : {}),
   };
 
   let matchResult = await matchDrivers([longitude, latitude], {
@@ -1111,6 +1136,20 @@ export const acceptRideBid = async (req, res) => {
       liveStatus: ride.liveStatus,
       acceptedAt: ride.acceptedAt,
     },
+  });
+};
+
+export const enableRideFareIncreaseController = async (req, res) => {
+  const ride = await enableRideFareIncrease({
+    rideId: req.params.rideId,
+    userId: req.auth.sub,
+  });
+
+  await notifyRideBiddingUpdated(ride.rideId || req.params.rideId);
+
+  res.json({
+    success: true,
+    data: ride,
   });
 };
 

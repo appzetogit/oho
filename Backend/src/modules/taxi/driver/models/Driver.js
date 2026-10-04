@@ -40,6 +40,13 @@ const driverSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    // Tokens issued before this moment are refused, forcing a fresh login.
+    // JWTs are otherwise valid until they expire, so this is the only way to
+    // sign an account out server-side.
+    tokensValidAfter: {
+      type: Date,
+      default: null,
+    },
     fcmTokenWeb: {
       type: String,
       default: '',
@@ -96,6 +103,19 @@ const driverSchema = new mongoose.Schema(
     isOnline: {
       type: Boolean,
       default: false,
+    },
+    // Last time this driver's app made an authenticated request. isOnline alone
+    // only says a driver once went on duty, never that they still are.
+    lastSeenAt: {
+      type: Date,
+      default: null,
+    },
+    // When the current on-duty stretch began. Unlike the incentive tracker's
+    // session start it is not reset by a repeated go-online call, so the
+    // 12-hour limit (driverOnlineLimitService) measures the real stretch.
+    onlineSessionStartedAt: {
+      type: Date,
+      default: null,
     },
     onlineSelfie: {
       imageUrl: {
@@ -303,6 +323,23 @@ const driverSchema = new mongoose.Schema(
       isBlocked: {
         type: Boolean,
         default: false,
+      },
+    },
+    rewardPoints: {
+      balance: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      totalCollected: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      totalSpent: {
+        type: Number,
+        default: 0,
+        min: 0,
       },
     },
     bankDetails: {

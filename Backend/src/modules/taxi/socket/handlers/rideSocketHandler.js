@@ -17,6 +17,9 @@ import {
 import { authorizeRideRoomAccess } from '../middleware/rideRoomAuth.js';
 import { SOCKET_EVENTS } from '../events.js';
 import { clearDriverRoute, updateDriverRoute } from '../services/driverRouteService.js';
+import { consumeScopedRateLimit } from '../../middlewares/rateLimitMiddleware.js';
+import { setCachedValue } from '../../../../utils/cache.js';
+import { DRIVER_LOCATION_CACHE_TTL_MS, driverLocationCacheKey } from '../../services/rideService.js';
 
 const driverLifecycleStatuses = new Set([
   RIDE_LIVE_STATUS.ACCEPTED,
@@ -27,6 +30,11 @@ const driverLifecycleStatuses = new Set([
 ]);
 const RIDE_LOCATION_PERSIST_MIN_DISTANCE_METERS = 12;
 const RIDE_LOCATION_PERSIST_MAX_INTERVAL_MS = 4000;
+// Above this, a new fix is too vague to be worth overwriting a better one
+// already on file - except the first fix of a trip, which always goes through.
+const RIDE_LOCATION_MAX_ACCURACY_METERS = 60;
+const RIDE_LOCATION_RATE_LIMIT_MAX = 60;
+const RIDE_LOCATION_RATE_LIMIT_WINDOW_MS = 10000;
 const rideLocationPersistState = new Map();
 
 const toRadians = (value) => Number(value || 0) * (Math.PI / 180);
@@ -121,20 +129,55 @@ export const registerRideSocketHandlers = ({ io, socket, onAsync }) => {
 
   socket.on(
     SOCKET_EVENTS.RIDE_DRIVER_LOCATION_UPDATE,
-    onAsync(socket, async ({ rideId, coordinates, heading, speed }) => {
+    onAsync(socket, async ({ rideId, coordinates, heading, speed, accuracy, timestamp, sequence }) => {
       if (socket.auth.role !== 'driver') {
         throw new Error('Only drivers can update live ride location');
       }
 
       await authorizeRideRoomAccess({ socket, rideId });
+
+      // Server self-protection, not correctness: a driver app sending faster
+      // than this is misbehaving, and dropping the excess costs nothing.
+      const rateLimitOutcome = await consumeScopedRateLimit({
+        scope: 'ride_driver_location_socket',
+        max: RIDE_LOCATION_RATE_LIMIT_MAX,
+        windowMs: RIDE_LOCATION_RATE_LIMIT_WINDOW_MS,
+        mode: 'custom',
+        parts: [String(socket.auth.sub)],
+      });
+      if (!rateLimitOutcome.allowed) return;
+
       const normalizedCoordinates = normalizePoint(coordinates, 'coordinates');
       const persistKey = `${rideId}:${socket.auth.sub}`;
       const now = Date.now();
       const previousPersistState = rideLocationPersistState.get(persistKey) || {};
-      const distanceFromPrevious = Array.isArray(previousPersistState.coordinates)
+      const hasPreviousFix = Array.isArray(previousPersistState.coordinates);
+
+      // Reject an out-of-order packet before touching the database or telling
+      // anyone about it. A late packet has to be invisible everywhere - the
+      // rider, the driver's own second device, any admin map - and all of them
+      // read from whatever gets past this point.
+      const incomingSequence = Number.isFinite(Number(sequence)) ? Number(sequence) : null;
+      const lastSequence = Number.isFinite(Number(previousPersistState.sequence))
+        ? Number(previousPersistState.sequence)
+        : null;
+      if (incomingSequence !== null && lastSequence !== null && incomingSequence <= lastSequence) {
+        return;
+      }
+
+      // Only once there is an earlier, better fix worth keeping. The very first
+      // fix of a trip goes through however vague it is; refusing it would leave
+      // the rider's map empty until the phone gets a clean lock.
+      const incomingAccuracy = Number.isFinite(Number(accuracy)) ? Number(accuracy) : null;
+      if (incomingAccuracy !== null && hasPreviousFix
+        && incomingAccuracy > RIDE_LOCATION_MAX_ACCURACY_METERS) {
+        return;
+      }
+
+      const distanceFromPrevious = hasPreviousFix
         ? getDistanceMeters(previousPersistState.coordinates, normalizedCoordinates)
         : Number.POSITIVE_INFINITY;
-      const shouldPersistLocation = !Array.isArray(previousPersistState.coordinates) ||
+      const shouldPersistLocation = !hasPreviousFix ||
         distanceFromPrevious >= RIDE_LOCATION_PERSIST_MIN_DISTANCE_METERS ||
         now - Number(previousPersistState.persistedAt || 0) >= RIDE_LOCATION_PERSIST_MAX_INTERVAL_MS;
       const fallbackLocationUpdate = {
@@ -154,7 +197,32 @@ export const registerRideSocketHandlers = ({ io, socket, onAsync }) => {
           })
         : fallbackLocationUpdate;
 
-      io.to(getRideRoom(rideId)).emit(SOCKET_EVENTS.RIDE_DRIVER_LOCATION_UPDATED, locationUpdate);
+      // Passed through untouched and never persisted: these exist purely so the
+      // rider client can run its own ordering and plausibility checks. An older
+      // driver build that does not send them simply omits the fields, which the
+      // rider treats as "nothing to compare against" - backward compatible by
+      // construction.
+      // Refreshed on every accepted fix regardless of the persist throttle: a
+      // REST read needs the driver's true latest position, not whatever was
+      // last written to the slower store. Fire-and-forget - a cache that is
+      // down must never hold up the live broadcast.
+      setCachedValue(
+        driverLocationCacheKey(rideId),
+        {
+          coordinates: normalizedCoordinates,
+          heading: locationUpdate.heading ?? null,
+          speed: locationUpdate.speed ?? null,
+          updatedAt: new Date().toISOString(),
+        },
+        { ttlMs: DRIVER_LOCATION_CACHE_TTL_MS },
+      ).catch(() => {});
+
+      io.to(getRideRoom(rideId)).emit(SOCKET_EVENTS.RIDE_DRIVER_LOCATION_UPDATED, {
+        ...locationUpdate,
+        ...(incomingAccuracy !== null ? { accuracy: incomingAccuracy } : {}),
+        ...(Number.isFinite(Number(timestamp)) ? { timestamp: Number(timestamp) } : {}),
+        ...(incomingSequence !== null ? { sequence: incomingSequence } : {}),
+      });
       if (shouldPersistLocation) {
         setImmediate(() => {
           mirrorRideDriverLocation({
@@ -169,6 +237,7 @@ export const registerRideSocketHandlers = ({ io, socket, onAsync }) => {
       rideLocationPersistState.set(persistKey, {
         coordinates: normalizedCoordinates,
         persistedAt: shouldPersistLocation ? now : Number(previousPersistState.persistedAt || 0),
+        sequence: incomingSequence ?? lastSequence,
       });
 
       updateDriverRoute({
@@ -182,7 +251,7 @@ export const registerRideSocketHandlers = ({ io, socket, onAsync }) => {
 
   socket.on(
     SOCKET_EVENTS.RIDE_STATUS_UPDATE,
-    onAsync(socket, async ({ rideId, status, paymentMethod }) => {
+    onAsync(socket, async ({ rideId, status, paymentMethod, otp }) => {
       if (socket.auth.role !== 'driver') {
         throw new Error('Only drivers can update ride status');
       }
@@ -198,6 +267,7 @@ export const registerRideSocketHandlers = ({ io, socket, onAsync }) => {
         driverId: socket.auth.sub,
         nextStatus: status,
         paymentMethod,
+        otp,
       });
       const populatedRide = await getRideDetails(rideId);
 
@@ -220,6 +290,8 @@ export const registerRideSocketHandlers = ({ io, socket, onAsync }) => {
           io.to(getDriverRoom(socket.auth.sub)).emit('driver:wallet:updated', {
             wallet: walletUpdate.wallet,
             transaction: walletUpdate.transaction,
+            earningTransaction: walletUpdate.earningTransaction,
+            commissionTransaction: walletUpdate.commissionTransaction,
           });
         }
         clearDriverRoute(socket.auth.sub);

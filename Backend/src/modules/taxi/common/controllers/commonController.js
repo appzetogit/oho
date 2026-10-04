@@ -4,6 +4,7 @@ import { env } from '../../../../config/env.js';
 import { getReferralSettings, getReferralTranslationContent } from '../../admin/services/adminService.js';
 import { getPublicActivePaymentGateway } from '../../services/paymentGatewayService.js';
 import { buildPaymentRequestContext, logPaymentDiagnostic } from '../../services/paymentDiagnostics.js';
+import { resolveRoute } from '../../services/routingService.js';
 
 /**
  * Common controller for shared utilities like file uploads
@@ -85,5 +86,22 @@ export const acknowledgeRechargeApiCallback = asyncHandler(async (req, res) => {
             body: req.body || {},
             receivedAt: new Date().toISOString(),
         },
+    });
+});
+
+/// Road route for a leg, shared by the rider and driver apps so both draw the
+/// same line. `data` is null when nothing could be resolved - the apps treat
+/// that as "still loading" and draw a straight line rather than inventing a
+/// road-shaped one.
+export const getRoute = asyncHandler(async (req, res) => {
+    const data = await resolveRoute({
+        origin: req.query.origin,
+        destination: req.query.destination,
+        waypoints: req.query.waypoints,
+    });
+
+    return res.json({
+        success: true,
+        data,
     });
 });

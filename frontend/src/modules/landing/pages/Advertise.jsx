@@ -34,7 +34,7 @@ const Advertise = () => {
     {
       icon: Globe,
       title: 'Website',
-      desc: 'Placements on zicab.in pages, seen by riders comparing fares and booking online.',
+      desc: 'Placements on ohoride.in pages, seen by riders comparing fares and booking online.',
       formats: ['Leaderboard banner', 'Sidebar tile', 'Sponsored service block'],
     },
     {
@@ -58,7 +58,7 @@ const Advertise = () => {
     {
       icon: Gift,
       title: 'Offers & Promotions',
-      desc: 'Co-branded coupons and cashback that ride along with a ZI CAB trip.',
+      desc: 'Co-branded coupons and cashback that ride along with an OHO RIDE trip.',
       formats: ['Coupon in offers tab', 'Co-branded promo code', 'Ride-and-win campaign'],
     },
     {
@@ -100,10 +100,10 @@ const Advertise = () => {
     <div className="advertise-page animate-fade-in" ref={pageRef}>
       <div className="page-hero">
         <div className="container">
-          <span className="page-tag">Advertise with ZI CAB</span>
+          <span className="page-tag">Advertise with OHO RIDE</span>
           <h1 className="page-title">Reach Riders Where Their Attention Already Is</h1>
           <p className="page-subtitle">
-            Every ZI CAB trip is a captive screen moment. Put your brand in front of riders and
+            Every OHO RIDE trip is a captive screen moment. Put your brand in front of riders and
             driver-partners across our app, website and driver network in Bengaluru, Mangaluru and Hubballi.
           </p>
         </div>
@@ -210,7 +210,7 @@ const Advertise = () => {
                 <h3>Enquiry Received</h3>
                 <p>
                   Thanks, <strong>{contactName || 'there'}</strong>. Our ad sales team will contact{' '}
-                  <strong>{phone}</strong> with the ZI CAB media kit.
+                  <strong>{phone}</strong> with the OHO RIDE media kit.
                 </p>
               </div>
             ) : (

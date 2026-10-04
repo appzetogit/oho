@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import { ApiError } from '../../../utils/ApiError.js';
-import { getOrLoadCachedValue } from '../../../utils/cache.js';
+import { getOrLoadCachedValue, readCachedValue } from '../../../utils/cache.js';
 import { normalizePoint, toPoint } from '../../../utils/geo.js';
 import { RIDE_LIVE_STATUS, RIDE_STATUS } from '../constants/index.js';
 import { AdminBusinessSetting } from '../admin/models/AdminBusinessSetting.js';
@@ -20,6 +20,7 @@ import { consumeUserSubscriptionRide, resolveApplicableUserSubscription } from '
 import { applyPromoToRideInTransaction } from './promoService.js';
 import { getTipSettings } from './appSettingsService.js';
 import { getBidRideSettings } from './transportSettingsService.js';
+import { notifyRideLifecycle } from './rideNotificationService.js';
 
 const clearUserActiveRideIfPresent = async (user) => {
   if (!user?.currentRideId) {
@@ -1223,6 +1224,47 @@ export const createRideRecord = async ({
   throw lastError || new ApiError(500, 'Failed to create ride with promo');
 };
 
+/// Where the socket relay parks the driver's true latest position.
+///
+/// Mongo only receives a fix once the persist throttle allows it (12 m moved,
+/// or 4 s elapsed), so a REST read straight off the document can be several
+/// seconds behind the live feed.
+export const driverLocationCacheKey = (rideId) => `ride:driverloc:${String(rideId)}`;
+
+/// Matches the client's own live-fix TTL: past this the driver app has most
+/// likely stopped sending and the persisted position is the honest answer.
+export const DRIVER_LOCATION_CACHE_TTL_MS = 30_000;
+
+/// Overlays the cached fix when it is newer than the persisted one.
+///
+/// In memory only - nothing is saved here. Best-effort throughout: if the
+/// cache is unreachable the persisted position is still perfectly usable, just
+/// a little older.
+const applyCachedDriverLocation = async (ride) => {
+  try {
+    const cached = await readCachedValue(driverLocationCacheKey(ride._id));
+    if (!cached || !Array.isArray(cached.coordinates) || cached.coordinates.length < 2) {
+      return;
+    }
+
+    const cachedAt = Date.parse(cached.updatedAt || '');
+    if (!Number.isFinite(cachedAt)) return;
+
+    const persistedAt = Date.parse(ride.lastDriverLocation?.updatedAt || '') || 0;
+    if (cachedAt <= persistedAt) return;
+
+    ride.lastDriverLocation = {
+      type: 'Point',
+      coordinates: cached.coordinates,
+      heading: cached.heading ?? null,
+      speed: cached.speed ?? null,
+      updatedAt: new Date(cachedAt),
+    };
+  } catch {
+    // Ignored on purpose - see the note above.
+  }
+};
+
 export const getRideDetails = async (rideId) => {
   const ride = await Ride.findById(rideId)
     .populate('deliveryId')
@@ -1232,6 +1274,8 @@ export const getRideDetails = async (rideId) => {
   if (!ride) {
     throw new ApiError(404, 'Ride not found');
   }
+
+  await applyCachedDriverLocation(ride);
 
   return ride;
 };
@@ -1681,7 +1725,7 @@ const rideStatusConfig = {
   },
 };
 
-export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymentMethod }) => {
+export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymentMethod, otp }) => {
   const config = rideStatusConfig[nextStatus];
 
   if (!config) {
@@ -1696,6 +1740,16 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
 
   if (!config.allowedCurrent.includes(ride.liveStatus)) {
     throw new ApiError(409, `Ride cannot move from ${ride.liveStatus} to ${nextStatus}`);
+  }
+
+  // The trip may only start with the PIN shown in the rider's app. Before this
+  // check the driver app's PIN field was decorative: any 4 digits started it.
+  if (nextStatus === RIDE_LIVE_STATUS.STARTED) {
+    const expectedOtp = String(ride.otp || '').trim();
+    const givenOtp = String(otp ?? '').trim();
+    if (expectedOtp && givenOtp !== expectedOtp) {
+      throw new ApiError(400, givenOtp ? 'Incorrect PIN. Ask the rider for the PIN shown in their app.' : 'Ride PIN is required to start the trip');
+    }
   }
 
   ride.liveStatus = nextStatus;
@@ -1758,6 +1812,17 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
 
   const populatedRide = await populateRideRealtime(ride._id);
   populatedRide.$locals.walletUpdate = walletUpdate;
+
+  /// Push the status change to both phones.
+  ///
+  /// Every transition funnels through here (REST `updateRideStatus` and the
+  /// socket handler both call this), so one call covers both paths. Not
+  /// awaited, for the same reason the invoice mail above is not: the driver
+  /// tapping "arrived" should not wait on FCM, and a push failure must never
+  /// undo a transition that is already saved.
+  notifyRideLifecycle(populatedRide, nextStatus).catch((error) => {
+    console.error('[push] ride lifecycle notification failed', nextStatus, error);
+  });
 
   return populatedRide;
 };
@@ -2021,6 +2086,101 @@ export const increaseRideBidCeiling = async ({ rideId, userId, incrementSteps = 
 
   if (!updatedRide) {
     throw new ApiError(409, 'Ride is not open for fare increases');
+  }
+
+  return serializeRideRealtime(updatedRide);
+};
+
+/// How long a normal city ride must have been searching before the rider is
+/// offered to raise their fare. Mirrors the rider app's reveal delay, with a
+/// little slack for clock skew between phone and server.
+const NORMAL_RIDE_FARE_INCREASE_AFTER_MS = 55 * 1000;
+
+/// Opens fare-raising on a city ride booked at the normal fare once nobody
+/// has taken it for a minute - the same rider-raises-fare flow a ride booked
+/// in bidding mode gets from the start. Only for vehicle types an admin set
+/// to 'bidding' or 'both'. Idempotent: a ride already open for raises is
+/// returned as is.
+export const enableRideFareIncrease = async ({ rideId, userId }) => {
+  const ride = await Ride.findOne({
+    _id: rideId,
+    userId,
+    status: RIDE_STATUS.SEARCHING,
+    liveStatus: RIDE_LIVE_STATUS.SEARCHING,
+  });
+
+  if (!ride) {
+    throw new ApiError(404, 'Active ride not found');
+  }
+
+  if (ride.pricingNegotiationMode === 'user_increment_only') {
+    return serializeRideRealtime(ride);
+  }
+
+  if (ride.pricingNegotiationMode === 'driver_bid' || String(ride.serviceType || 'ride') === 'intercity') {
+    throw new ApiError(409, 'This ride uses driver offers instead of fare increases');
+  }
+
+  const searchingForMs = Date.now() - new Date(ride.createdAt || Date.now()).getTime();
+  if (searchingForMs < NORMAL_RIDE_FARE_INCREASE_AFTER_MS) {
+    throw new ApiError(409, 'Fare can be increased once the search has run for a minute');
+  }
+
+  const vehicle = ride.vehicleTypeId
+    ? await Vehicle.findById(ride.vehicleTypeId).select('dispatch_type').lean()
+    : null;
+  const supportsBidding = ['bidding', 'both'].includes(String(vehicle?.dispatch_type || '').trim().toLowerCase());
+  if (!supportsBidding) {
+    throw new ApiError(409, 'Fare increases are not enabled for this vehicle type');
+  }
+
+  const currentFare = Math.max(0, Number(ride.fare || 0));
+  if (currentFare <= 0) {
+    throw new ApiError(409, 'Fare increases are not available for this ride');
+  }
+
+  const bidRideSettings = await getBidRideSettings();
+  const stepAmount = normalizeBidStepAmount(bidRideSettings.user_bidding_amount_increase_or_decrease);
+  const range = resolveBidRideRange({
+    baseFare: Number(ride.baseFare || currentFare),
+    bidStepAmount: stepAmount,
+    settings: bidRideSettings,
+  });
+  const ceiling = Math.max(currentFare, range.userBidCeilingFare);
+  if (ceiling <= currentFare) {
+    throw new ApiError(409, 'Fare is already at the configured ceiling');
+  }
+
+  const waitMinutes = toPositiveNumber(bidRideSettings.user_fare_increase_wait_minutes, 2);
+  const updatedRide = await Ride.findOneAndUpdate(
+    {
+      _id: rideId,
+      userId,
+      status: RIDE_STATUS.SEARCHING,
+      liveStatus: RIDE_LIVE_STATUS.SEARCHING,
+      pricingNegotiationMode: { $in: [null, 'none'] },
+    },
+    {
+      $set: {
+        pricingNegotiationMode: 'user_increment_only',
+        baseFare: Number(ride.baseFare || currentFare),
+        bidStepAmount: stepAmount,
+        bidFloorFare: currentFare,
+        userMaxBidFare: currentFare,
+        bidCeilingMaxFare: ceiling,
+        fareIncreaseWaitMinutes: waitMinutes,
+        // The minute of searching was the wait - the first raise is allowed now.
+        nextFareIncreaseAt: null,
+      },
+    },
+    { returnDocument: 'after', runValidators: true },
+  );
+
+  if (!updatedRide) {
+    // Raced with another enable or with dispatch finishing; return what is there.
+    const latest = await Ride.findById(rideId);
+    if (latest?.pricingNegotiationMode === 'user_increment_only') return serializeRideRealtime(latest);
+    throw new ApiError(409, 'Ride is no longer searching');
   }
 
   return serializeRideRealtime(updatedRide);

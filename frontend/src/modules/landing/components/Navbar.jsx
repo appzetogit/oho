@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
-import { Menu, X, PhoneCall, Car, ChevronRight } from 'lucide-react';
+import { Menu, X, MapPin, ChevronDown, ArrowRight, ChevronRight } from 'lucide-react';
 import { scrollToTop } from '../hooks/useSmoothScroll';
 
 const Navbar = ({ activeTab, setActiveTab, openBookingModal }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [selectedCity, setSelectedCity] = useState('Indiranagar, Bengaluru');
+  const [cityDropdownOpen, setCityDropdownOpen] = useState(false);
 
   const navItems = [
     { id: 'home', label: 'Home' },
@@ -14,6 +16,14 @@ const Navbar = ({ activeTab, setActiveTab, openBookingModal }) => {
     { id: 'driver', label: 'Driver' },
     { id: 'advertise', label: 'Advertise' },
     { id: 'contact', label: 'Contact Us' },
+  ];
+
+  const cities = [
+    'Indiranagar, Bengaluru',
+    'Koramangala, Bengaluru',
+    'Whitefield, Bengaluru',
+    'Hampankatta, Mangaluru',
+    'Vidyanagar, Hubballi'
   ];
 
   const handleNavClick = (id) => {
@@ -31,13 +41,13 @@ const Navbar = ({ activeTab, setActiveTab, openBookingModal }) => {
           onClick={() => handleNavClick('home')}
           style={{ cursor: 'pointer' }}
         >
-          <img src="/zicab-logo.jpg" alt="ZI CAB" className="brand-logo-img" />
+          <img src="/oho-logo.jpg" alt="OHO RIDE" className="brand-logo-img" />
           <div className="brand-logo-text">
             <div className="logo-text-wrapper">
-              <span className="logo-zi">ZI</span>
-              <span className="logo-cab">CAB</span>
+              <span className="logo-oho">OHO</span>
+              <span className="logo-ride">RIDE</span>
             </div>
-            <span className="logo-tagline">Your Ride. Our Priority.</span>
+            <span className="logo-tagline">FAST. RELIABLE. SAFE.</span>
           </div>
         </div>
 
@@ -55,13 +65,46 @@ const Navbar = ({ activeTab, setActiveTab, openBookingModal }) => {
           ))}
         </nav>
 
-        {/* Action Button */}
+        {/* Action Button & Location Selector */}
         <div className="navbar-actions">
+          {/* City / Area Dropdown Pill */}
+          <div className="nav-location-dropdown">
+            <button 
+              type="button" 
+              className="nav-location-pill"
+              onClick={() => setCityDropdownOpen(!cityDropdownOpen)}
+            >
+              <MapPin size={14} color="#D90429" className="flex-shrink-0" />
+              <span className="location-name">{selectedCity}</span>
+              <ChevronDown size={13} color="#94A3B8" />
+            </button>
+
+            {cityDropdownOpen && (
+              <div className="location-menu-dropdown">
+                {cities.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    className={`loc-option ${selectedCity === c ? 'active' : ''}`}
+                    onClick={() => {
+                      setSelectedCity(c);
+                      setCityDropdownOpen(false);
+                    }}
+                  >
+                    <MapPin size={12} color="#D90429" />
+                    <span>{c}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           <button 
-            className="btn btn-teal nav-book-btn"
+            className="btn-nav-book"
             onClick={openBookingModal}
           >
-            Book a Ride
+            <span>Book a Ride</span>
+            <ArrowRight size={15} />
           </button>
 
           {/* Hamburger Menu Toggle for Mobile */}
@@ -91,7 +134,7 @@ const Navbar = ({ activeTab, setActiveTab, openBookingModal }) => {
             ))}
             <div className="mobile-drawer-cta">
               <button 
-                className="btn btn-teal w-full"
+                className="btn btn-red w-full"
                 onClick={() => {
                   setMobileMenuOpen(false);
                   openBookingModal();
@@ -107,12 +150,14 @@ const Navbar = ({ activeTab, setActiveTab, openBookingModal }) => {
       <style>{`
         .zicab-landing {
           .navbar-header {
-            background-color: #0B1F3A;
+            background-color: rgba(11, 15, 25, 0.92);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
             border-bottom: 1px solid rgba(255, 255, 255, 0.08);
             position: sticky;
             top: 0;
             z-index: 1000;
-            box-shadow: 0 4px 20px rgba(7, 21, 43, 0.5);
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
           }
 
           .navbar-container {
@@ -125,15 +170,17 @@ const Navbar = ({ activeTab, setActiveTab, openBookingModal }) => {
           .brand-logo {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
           }
 
           .brand-logo-img {
-            width: 46px;
-            height: 46px;
-            border-radius: 11px;
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
             object-fit: cover;
             flex-shrink: 0;
+            border: 1px solid rgba(217, 4, 41, 0.35);
+            box-shadow: 0 2px 10px rgba(217, 4, 41, 0.25);
           }
 
           .brand-logo-text {
@@ -147,28 +194,28 @@ const Navbar = ({ activeTab, setActiveTab, openBookingModal }) => {
             line-height: 1;
           }
 
-          .logo-zi {
-            font-size: 30px;
-            font-weight: 800;
+          .logo-oho {
+            font-size: 26px;
+            font-weight: 900;
             color: #FFFFFF;
-            font-style: italic;
             letter-spacing: -0.5px;
           }
 
-          .logo-cab {
-            font-size: 26px;
+          .logo-ride {
+            font-size: 23px;
             font-weight: 800;
-            color: #00BBA9;
+            color: #D90429;
             margin-left: 4px;
-            letter-spacing: 1px;
+            letter-spacing: 0.5px;
           }
 
           .logo-tagline {
-            font-size: 10.5px;
-            color: rgba(255, 255, 255, 0.7);
-            font-weight: 400;
-            letter-spacing: 0.2px;
+            font-size: 10px;
+            color: rgba(255, 255, 255, 0.65);
+            font-weight: 500;
+            letter-spacing: 0.4px;
             margin-top: 2px;
+            text-transform: uppercase;
           }
 
           .desktop-nav {
@@ -190,7 +237,7 @@ const Navbar = ({ activeTab, setActiveTab, openBookingModal }) => {
           }
 
           .nav-link-btn:hover {
-            color: #00BBA9;
+            color: #FF4D6D;
           }
 
           .nav-link-btn.active {
@@ -205,19 +252,104 @@ const Navbar = ({ activeTab, setActiveTab, openBookingModal }) => {
             transform: translateX(-50%);
             width: 18px;
             height: 3px;
-            background-color: #00BBA9;
+            background-color: #D90429;
             border-radius: 2px;
+            box-shadow: 0 0 8px rgba(217, 4, 41, 0.8);
           }
 
           .navbar-actions {
             display: flex;
             align-items: center;
-            gap: 16px;
+            gap: 14px;
           }
 
-          .nav-book-btn {
-            padding: 10px 22px;
-            font-size: 14.5px;
+          .nav-location-dropdown {
+            position: relative;
+          }
+
+          .nav-location-pill {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 9999px;
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 500;
+            color: #E2E8F0;
+            cursor: pointer;
+            transition: all 0.2s;
+          }
+
+          .nav-location-pill:hover {
+            background: rgba(255, 255, 255, 0.09);
+            border-color: rgba(217, 4, 41, 0.4);
+          }
+
+          .location-name {
+            white-space: nowrap;
+          }
+
+          .location-menu-dropdown {
+            position: absolute;
+            top: calc(100% + 8px);
+            right: 0;
+            background: #0D121F;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 12px;
+            padding: 6px;
+            min-width: 220px;
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+          }
+
+          .loc-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            font-size: 12.5px;
+            color: #CBD5E1;
+            background: none;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            text-align: left;
+            width: 100%;
+            transition: all 0.15s;
+          }
+
+          .loc-option:hover,
+          .loc-option.active {
+            background: rgba(217, 4, 41, 0.14);
+            color: #FFFFFF;
+            font-weight: 600;
+          }
+
+          .btn-nav-book {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: linear-gradient(135deg, #EF1C38 0%, #D90429 50%, #B8001F 100%);
+            color: #FFFFFF;
+            font-size: 14px;
+            font-weight: 700;
+            padding: 9px 22px;
+            border-radius: 9999px;
+            border: none;
+            cursor: pointer;
+            box-shadow: 0 4px 18px rgba(217, 4, 41, 0.45);
+            transition: all 0.2s ease;
+            white-space: nowrap;
+          }
+
+          .btn-nav-book:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(217, 4, 41, 0.6);
           }
 
           .mobile-toggle-btn {
@@ -230,7 +362,7 @@ const Navbar = ({ activeTab, setActiveTab, openBookingModal }) => {
 
           .mobile-drawer {
             display: none;
-            background-color: #07152B;
+            background-color: #0B0F19;
             border-top: 1px solid rgba(255, 255, 255, 0.1);
             padding: 16px 20px 24px;
           }
@@ -257,9 +389,9 @@ const Navbar = ({ activeTab, setActiveTab, openBookingModal }) => {
           }
 
           .mobile-nav-item.active {
-            background: rgba(0, 187, 169, 0.15);
-            border-color: #00BBA9;
-            color: #00BBA9;
+            background: rgba(217, 4, 41, 0.14);
+            border-color: #D90429;
+            color: #FF4D6D;
           }
 
           .mobile-drawer-cta {

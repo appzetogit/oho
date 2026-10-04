@@ -135,6 +135,13 @@ const userSchema = new mongoose.Schema(
         default: null,
       },
     },
+    // Tokens issued before this moment are refused, forcing a fresh login.
+    // JWTs are otherwise valid until they expire, so this is the only way to
+    // sign an account out server-side.
+    tokensValidAfter: {
+      type: Date,
+      default: null,
+    },
     fcmTokenWeb: {
       type: String,
       default: '',

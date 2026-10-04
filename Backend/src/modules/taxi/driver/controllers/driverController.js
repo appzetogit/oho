@@ -25,6 +25,7 @@ import { RentalVehicleType } from "../../admin/models/RentalVehicleType.js";
 import { RentalBookingRequest } from "../../admin/models/RentalBookingRequest.js";
 import { CustomerBiometricProfile } from "../../admin/models/CustomerBiometricProfile.js";
 import { AdminBusinessSetting } from "../../admin/models/AdminBusinessSetting.js";
+import { isDriverOnlineSelfieRequired } from "../../services/transportSettingsService.js";
 import { Notification } from "../../admin/promotions/models/Notification.js";
 import { FleetVehicle } from "../../admin/models/FleetVehicle.js";
 import { Zone } from "../models/Zone.js";
@@ -34,7 +35,8 @@ import {
   hashPassword,
   signAccessToken,
 } from "../services/authService.js";
-import { cancelScheduledRideByDriver, emitToDriver } from "../../services/dispatchService.js";
+import { cancelRideByDriver, emitToDriver } from "../../services/dispatchService.js";
+import { CancellationReason } from "../../admin/models/CancellationReason.js";
 import { notifyLateAvailableDriver } from "../../services/dispatchService.js";
 import { findZoneByPickup } from "../services/locationService.js";
 import { listDriverServiceLocations } from "../services/serviceLocationService.js";
@@ -2856,7 +2858,12 @@ export const goOnline = async (req, res) => {
     String(existingDriver.onlineSelfie?.forDate || "") === todayKey &&
     String(existingDriver.onlineSelfie?.imageUrl || "").trim();
 
-  if (!hasTodaySelfie && !String(selfieImageUrl || "").trim()) {
+  // Admin-configurable: with the toggle off, drivers go online without one. A
+  // selfie sent anyway is still stored, so turning the toggle back on does not
+  // lose whatever was captured while it was off.
+  const selfieRequired = await isDriverOnlineSelfieRequired();
+
+  if (selfieRequired && !hasTodaySelfie && !String(selfieImageUrl || "").trim()) {
     throw new ApiError(400, "A selfie is required before going online today");
   }
 
@@ -2871,20 +2878,28 @@ export const goOnline = async (req, res) => {
   );
   const nextTodaySummary = buildDriverTodaySummaryFromDocument(existingDriver);
 
-  const nextOnlineSelfie =
-    hasTodaySelfie && !String(selfieImageUrl || "").trim()
-      ? existingDriver.onlineSelfie
-      : {
-          imageUrl: String(selfieImageUrl || "").trim(),
-          capturedAt: new Date(),
-          uploadedAt: new Date(),
-          forDate: todayKey,
-        };
+  // Only stamp a new record when a selfie was actually supplied. Writing one
+  // regardless would, with the toggle off, save an empty imageUrl dated today —
+  // a record claiming a capture that never happened.
+  const nextOnlineSelfie = String(selfieImageUrl || "").trim()
+    ? {
+        imageUrl: String(selfieImageUrl).trim(),
+        capturedAt: new Date(),
+        uploadedAt: new Date(),
+        forDate: todayKey,
+      }
+    : existingDriver.onlineSelfie;
 
   const driver = await Driver.findByIdAndUpdate(
     req.auth.sub,
     {
       isOnline: true,
+      // Kept across repeated go-online calls (app restarts re-send it); only
+      // a real offline -> online switch starts a new stretch.
+      onlineSessionStartedAt:
+        existingDriver.isOnline && existingDriver.onlineSessionStartedAt
+          ? existingDriver.onlineSessionStartedAt
+          : new Date(),
       zoneId: zone?._id || null,
       ...(existingDriver.owner_id ? { 'wallet.isBlocked': false } : {}),
       location: toPoint(coordinates, "location"),
@@ -3225,25 +3240,49 @@ export const getDriverScheduledRides = async (req, res) => {
   });
 };
 
+/// Serves both `/scheduled-rides/:rideId/cancel` and `/rides/:rideId/cancel`:
+/// an upcoming scheduled ride, or a live one the driver accepted and has not
+/// yet started (on the way to, or waiting at, the pickup).
 export const cancelDriverScheduledRide = async (req, res) => {
   const rideId = toCleanString(req.params?.rideId);
+  const { reasonId, note } = req.body || {};
 
   if (!rideId) {
     throw new ApiError(400, "Ride id is required");
   }
 
-  const ride = await cancelScheduledRideByDriver({
+  // Taken from the driver catalog rather than the request body, so the stored
+  // label is one the admin actually offers. An unknown id is ignored rather
+  // than rejected - the driver must always be able to cancel.
+  let reason = "";
+  let resolvedReasonId = null;
+  if (reasonId && mongoose.isValidObjectId(reasonId)) {
+    const catalogEntry = await CancellationReason.findOne({
+      _id: reasonId,
+      audience: "driver",
+      active: true,
+    }).lean();
+    if (catalogEntry) {
+      reason = catalogEntry.title;
+      resolvedReasonId = catalogEntry._id;
+    }
+  }
+
+  const ride = await cancelRideByDriver({
     rideId,
     driverId: req.auth.sub,
+    reason,
+    reasonId: resolvedReasonId,
+    note: String(note || "").slice(0, 500),
   });
 
   if (!ride) {
-    throw new ApiError(404, "Scheduled ride not found for this driver");
+    throw new ApiError(404, "Ride not found for this driver");
   }
 
   res.json({
     success: true,
-    message: "Scheduled ride cancelled successfully",
+    message: "Ride cancelled successfully",
     data: {
       rideId: String(ride._id || ""),
       status: ride.status || RIDE_STATUS.CANCELLED,
@@ -9781,6 +9820,7 @@ export const goOffline = async (req, res) => {
     {
       isOnline: false,
       socketId: null,
+      onlineSessionStartedAt: null,
       incentiveTracking: {
         ...finalizedTracking,
         currentOnlineStartedAt: null,
