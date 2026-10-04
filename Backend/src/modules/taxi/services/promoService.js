@@ -186,9 +186,19 @@ export const validatePromoForContext = async ({
   };
 };
 
-export const applyPromoToRideInTransaction = async ({
-  session,
-  ride,
+/**
+ * Reserve a promo for a ride that is about to be created: validate it, count
+ * the use against the promo and the rider, and record the redemption.
+ *
+ * No transaction: production is a standalone MongoDB, which cannot start one.
+ * Every write is a single-document conditional update, so the usage limits
+ * still cannot be exceeded under concurrency, and each one registers how to
+ * undo itself. If a later write fails, the earlier ones are undone in reverse;
+ * on success the caller gets release() to hand the promo back should the ride
+ * itself fail to save.
+ */
+export const reservePromoForRide = async ({
+  rideId,
   userId,
   code,
   fare,
@@ -210,7 +220,7 @@ export const applyPromoToRideInTransaction = async ({
   const serviceLocationId = toObjectIdOrThrow(service_location_id, 'service location id');
   const userObjectId = toObjectIdOrThrow(userId, 'user id');
 
-  const promo = await PromoCode.findOne({ code: normalizedCode }).session(session);
+  const promo = await PromoCode.findOne({ code: normalizedCode });
   if (!promo) {
     throw new ApiError(404, 'Promo code not found');
   }
@@ -253,7 +263,7 @@ export const applyPromoToRideInTransaction = async ({
     throw new ApiError(409, 'Promo code usage limit reached');
   }
 
-  const userCounter = await PromoUserCounter.findOne({ promo_id: promo._id, user_id: userObjectId }).session(session);
+  const userCounter = await PromoUserCounter.findOne({ promo_id: promo._id, user_id: userObjectId });
   const usesPerUser = Math.max(1, Number(promo.uses_per_user || 1));
   if (userCounter && Number(userCounter.uses_count || 0) >= usesPerUser) {
     throw new ApiError(409, 'Promo code usage limit reached for user');
@@ -264,91 +274,104 @@ export const applyPromoToRideInTransaction = async ({
     throw new ApiError(400, 'Promo code does not provide a discount for this fare');
   }
 
-  const promoUpdateQuery = { _id: promo._id };
-  if (maxUsesTotal > 0) {
-    promoUpdateQuery.usage_count = { $lt: maxUsesTotal };
-  }
+  const undo = [];
+  const release = async () => {
+    for (const step of undo.reverse()) {
+      await step().catch(() => null);
+    }
+    undo.length = 0;
+  };
 
-  const promoUpdated = await PromoCode.findOneAndUpdate(promoUpdateQuery, { $inc: { usage_count: 1 } }, { returnDocument: 'after', session });
-  if (!promoUpdated) {
-    throw new ApiError(409, 'Promo code usage limit reached');
-  }
-
-  const cumulativeCap = Math.max(0, Number(promo.cumulative_max_discount_amount || 0));
-  const cumulativeCeiling = cumulativeCap > 0 ? cumulativeCap - breakdown.discount_amount : null;
-
-  if (!userCounter) {
-    if (cumulativeCap > 0 && breakdown.discount_amount > cumulativeCap) {
-      throw new ApiError(409, 'Promo code cumulative discount cap reached for user');
+  try {
+    const promoUpdateQuery = { _id: promo._id };
+    if (maxUsesTotal > 0) {
+      promoUpdateQuery.usage_count = { $lt: maxUsesTotal };
     }
 
-    await PromoUserCounter.create(
-      [
-        {
-          promo_id: promo._id,
-          user_id: userObjectId,
-          uses_count: 1,
-          cumulative_discount_amount: breakdown.discount_amount,
-        },
-      ],
-      { session },
-    );
-  } else {
-    const counterQuery = { _id: userCounter._id, uses_count: { $lt: usesPerUser } };
-    if (cumulativeCeiling !== null) {
-      counterQuery.cumulative_discount_amount = { $lte: cumulativeCeiling };
+    const promoUpdated = await PromoCode.findOneAndUpdate(promoUpdateQuery, { $inc: { usage_count: 1 } }, { returnDocument: 'after' });
+    if (!promoUpdated) {
+      throw new ApiError(409, 'Promo code usage limit reached');
+    }
+    undo.push(() => PromoCode.updateOne({ _id: promo._id, usage_count: { $gt: 0 } }, { $inc: { usage_count: -1 } }));
+
+    const cumulativeCap = Math.max(0, Number(promo.cumulative_max_discount_amount || 0));
+    const cumulativeCeiling = cumulativeCap > 0 ? cumulativeCap - breakdown.discount_amount : null;
+
+    if (!userCounter) {
+      if (cumulativeCap > 0 && breakdown.discount_amount > cumulativeCap) {
+        throw new ApiError(409, 'Promo code cumulative discount cap reached for user');
+      }
+
+      // The unique (promo_id, user_id) index makes a concurrent first use fail
+      // here rather than create a second counter.
+      const createdCounter = await PromoUserCounter.create({
+        promo_id: promo._id,
+        user_id: userObjectId,
+        uses_count: 1,
+        cumulative_discount_amount: breakdown.discount_amount,
+      });
+      undo.push(() => PromoUserCounter.deleteOne({ _id: createdCounter._id }));
+    } else {
+      const counterQuery = { _id: userCounter._id, uses_count: { $lt: usesPerUser } };
+      if (cumulativeCeiling !== null) {
+        counterQuery.cumulative_discount_amount = { $lte: cumulativeCeiling };
+      }
+
+      const counterUpdated = await PromoUserCounter.findOneAndUpdate(
+        counterQuery,
+        { $inc: { uses_count: 1, cumulative_discount_amount: breakdown.discount_amount } },
+        { returnDocument: 'after' },
+      );
+
+      if (!counterUpdated) {
+        throw new ApiError(409, 'Promo code usage limit reached for user');
+      }
+      undo.push(() => PromoUserCounter.updateOne(
+        { _id: userCounter._id },
+        { $inc: { uses_count: -1, cumulative_discount_amount: -breakdown.discount_amount } },
+      ));
     }
 
-    const counterUpdated = await PromoUserCounter.findOneAndUpdate(
-      counterQuery,
-      { $inc: { uses_count: 1, cumulative_discount_amount: breakdown.discount_amount } },
-      { returnDocument: 'after', session },
-    );
+    const redemption = await PromoRedemption.create({
+      promo_id: promo._id,
+      code: promo.code,
+      user_id: userObjectId,
+      ride_id: rideId,
+      service_location_id: serviceLocationId,
+      transport_type: promo.transport_type || transportType,
+      fare_before_discount: breakdown.fare_before_discount,
+      discount_amount: breakdown.discount_amount,
+      fare_after_discount: breakdown.fare_after_discount,
+      discount_percentage_snapshot: breakdown.discount_percentage,
+      maximum_discount_amount_snapshot: breakdown.caps.maximum_discount_amount,
+      cumulative_max_discount_amount_snapshot: breakdown.caps.cumulative_max_discount_amount,
+      uses_per_user_snapshot: usesPerUser,
+      max_uses_total_snapshot: maxUsesTotal,
+      status: 'applied',
+      idempotency_key: normalizeText(`ride:${rideId}:promo:${promo._id}`),
+    });
+    undo.push(() => PromoRedemption.deleteOne({ _id: redemption._id }));
 
-    if (!counterUpdated) {
+    const ridePromo = {
+      code: promo.code,
+      promo_id: promo._id,
+      discount_amount: breakdown.discount_amount,
+      fare_before_discount: breakdown.fare_before_discount,
+      fare_after_discount: breakdown.fare_after_discount,
+      service_location_id: serviceLocationId,
+      transport_type: transportType,
+      applied_at: new Date(),
+    };
+
+    return { promo: promoUpdated.toObject(), breakdown, ridePromo, release };
+  } catch (error) {
+    await release();
+    if (error?.code === 11000) {
+      // Lost the race to create this rider's first use of the promo.
       throw new ApiError(409, 'Promo code usage limit reached for user');
     }
+    throw error;
   }
-
-  await PromoRedemption.create(
-    [
-      {
-        promo_id: promo._id,
-        code: promo.code,
-        user_id: userObjectId,
-        ride_id: ride._id,
-        service_location_id: serviceLocationId,
-        transport_type: promo.transport_type || transportType,
-        fare_before_discount: breakdown.fare_before_discount,
-        discount_amount: breakdown.discount_amount,
-        fare_after_discount: breakdown.fare_after_discount,
-        discount_percentage_snapshot: breakdown.discount_percentage,
-        maximum_discount_amount_snapshot: breakdown.caps.maximum_discount_amount,
-        cumulative_max_discount_amount_snapshot: breakdown.caps.cumulative_max_discount_amount,
-        uses_per_user_snapshot: usesPerUser,
-        max_uses_total_snapshot: maxUsesTotal,
-        status: 'applied',
-        idempotency_key: normalizeText(`ride:${ride._id}:promo:${promo._id}`),
-      },
-    ],
-    { session },
-  );
-
-  ride.promo = {
-    code: promo.code,
-    promo_id: promo._id,
-    discount_amount: breakdown.discount_amount,
-    fare_before_discount: breakdown.fare_before_discount,
-    fare_after_discount: breakdown.fare_after_discount,
-    service_location_id: serviceLocationId,
-    transport_type: transportType,
-    applied_at: new Date(),
-  };
-  ride.fare = breakdown.fare_after_discount;
-
-  await ride.save({ session });
-
-  return { promo: promoUpdated.toObject(), breakdown };
 };
 
 export const listAvailablePromosForUser = async ({

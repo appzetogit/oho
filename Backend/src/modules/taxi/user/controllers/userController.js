@@ -2245,33 +2245,31 @@ export const transferUserWalletToDriver = async (req, res) => {
     recipientDriver.name || [recipientDriver.firstName, recipientDriver.lastName].filter(Boolean).join(' ') || 'Driver',
   ).trim();
 
-  const session = await mongoose.startSession();
+  // No transaction: production is a standalone MongoDB, which cannot start one.
+  // The debit is a single conditional update, so the balance check and the
+  // deduction cannot race; if the driver credit then fails, the debit is
+  // refunded, the same way user-to-user transfers already work.
+  const debitTx = {
+    kind: 'debit',
+    amount,
+    title: `Sent to driver ${driverDisplayName}`,
+    counterpartyPhone: driverPhone,
+    provider: 'internal_driver_wallet_transfer',
+    providerPaymentId: transferId,
+  };
 
+  const senderUpdate = await UserWallet.updateOne(
+    { userId: senderId, balance: { $gte: amount } },
+    { $inc: { balance: -amount }, $push: { transactions: { $each: [debitTx], $slice: -50 } } },
+  );
+
+  if (!senderUpdate?.modifiedCount) {
+    throw new ApiError(400, 'Insufficient wallet balance');
+  }
+
+  let walletUpdate;
   try {
-    session.startTransaction();
-
-    const senderWallet = await UserWallet.findOne({ userId: senderId }).session(session);
-    if (!senderWallet) {
-      throw new ApiError(404, 'User wallet not found');
-    }
-
-    if (Number(senderWallet.balance || 0) < amount) {
-      throw new ApiError(400, 'Insufficient wallet balance');
-    }
-
-    senderWallet.balance = Math.round((Number(senderWallet.balance || 0) - amount) * 100) / 100;
-    senderWallet.transactions.push({
-      kind: 'debit',
-      amount,
-      title: `Sent to driver ${driverDisplayName}`,
-      counterpartyPhone: driverPhone,
-      provider: 'internal_driver_wallet_transfer',
-      providerPaymentId: transferId,
-    });
-    senderWallet.transactions = senderWallet.transactions.slice(-50);
-    await senderWallet.save({ session });
-
-    const walletUpdate = await applyDriverWalletAdjustment({
+    walletUpdate = await applyDriverWalletAdjustment({
       driverId: recipientDriver._id,
       amount,
       type: 'adjustment',
@@ -2283,54 +2281,52 @@ export const transferUserWalletToDriver = async (req, res) => {
         senderPhone: sender.phone || '',
         senderName: senderDisplayName,
       },
-      session,
-    });
-
-    await session.commitTransaction();
-
-    emitToDriver(recipientDriver._id, 'driver:wallet:updated', {
-      wallet: walletUpdate.wallet,
-      transaction: walletUpdate.transaction,
-      notification: {
-        title: 'Wallet credited',
-        body: `Rs ${amount.toFixed(2)} received from rider wallet`,
-      },
-    });
-
-    sendPushNotificationToEntities({
-      driverIds: [recipientDriver._id],
-      title: 'Wallet credited',
-      body: `Rs ${amount.toFixed(2)} received from rider wallet`,
-      data: {
-        type: 'driver_wallet_credit',
-        amount: String(amount),
-        transferId,
-      },
-    }).catch(() => {});
-
-    const refreshedWallet = await UserWallet.findOne({ userId: senderId })
-      .select('balance refundWallet transactions')
-      .slice('transactions', -10)
-      .lean();
-
-    res.status(201).json({
-      success: true,
-      data: {
-        ...buildUserWalletPayload(refreshedWallet),
-        transfer: {
-          id: transferId,
-          amount,
-          driverPhone,
-          driverName: driverDisplayName,
-        },
-      },
     });
   } catch (error) {
-    await session.abortTransaction();
+    await UserWallet.updateOne(
+      { userId: senderId },
+      { $inc: { balance: amount }, $pull: { transactions: { providerPaymentId: transferId } } },
+    );
     throw error;
-  } finally {
-    session.endSession();
   }
+
+  emitToDriver(recipientDriver._id, 'driver:wallet:updated', {
+    wallet: walletUpdate.wallet,
+    transaction: walletUpdate.transaction,
+    notification: {
+      title: 'Wallet credited',
+      body: `Rs ${amount.toFixed(2)} received from rider wallet`,
+    },
+  });
+
+  sendPushNotificationToEntities({
+    driverIds: [recipientDriver._id],
+    title: 'Wallet credited',
+    body: `Rs ${amount.toFixed(2)} received from rider wallet`,
+    data: {
+      type: 'driver_wallet_credit',
+      amount: String(amount),
+      transferId,
+    },
+  }).catch(() => {});
+
+  const refreshedWallet = await UserWallet.findOne({ userId: senderId })
+    .select('balance refundWallet transactions')
+    .slice('transactions', -10)
+    .lean();
+
+  res.status(201).json({
+    success: true,
+    data: {
+      ...buildUserWalletPayload(refreshedWallet),
+      transfer: {
+        id: transferId,
+        amount,
+        driverPhone,
+        driverName: driverDisplayName,
+      },
+    },
+  });
 };
 
 export const createRazorpayWalletTopupOrder = async (req, res) => {
