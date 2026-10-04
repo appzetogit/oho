@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import * as commonController from '../controllers/commonController.js';
+import { authenticate } from '../../middlewares/authMiddleware.js';
 
 export const commonRouter = Router();
 
@@ -11,3 +12,7 @@ commonRouter.get('/common/payment-gateway', commonController.getPaymentGatewayCo
 commonRouter.post('/common/payment-gateway/phonepe/callback', commonController.acknowledgePhonePeCallback);
 commonRouter.get('/common/recharge-api/callback', commonController.acknowledgeRechargeApiCallback);
 commonRouter.post('/common/recharge-api/callback', commonController.acknowledgeRechargeApiCallback);
+
+// Authenticated: routing costs real lookups, and only a signed-in rider or
+// driver has a leg worth drawing.
+commonRouter.get('/route', authenticate(['user', 'driver']), commonController.getRoute);

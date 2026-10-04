@@ -98,7 +98,7 @@ const Services = ({ openBookingModal }) => {
     <div className="services-page animate-fade-in" ref={pageRef}>
       <div className="page-hero">
         <div className="container">
-          <span className="page-tag">ZI CAB Offerings</span>
+          <span className="page-tag">OHO RIDE Offerings</span>
           <h1 className="page-title">Comprehensive Mobility Services</h1>
           <p className="page-subtitle">
             Whether for daily city commute, airport runs, or outstation family road trips, we have the ideal vehicle and service for you.

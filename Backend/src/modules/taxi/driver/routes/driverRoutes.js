@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { asyncHandler } from "../../../../utils/asyncHandler.js";
 import { authenticate } from "../../middlewares/authMiddleware.js";
-import { getPendingRideOffers } from "../controllers/rideOfferController.js";
+import { acceptRideOffer, getPendingRideOffers, rejectRideOffer } from "../controllers/rideOfferController.js";
 import {
   loginRateLimit,
   otpSendRateLimit,
@@ -164,6 +164,9 @@ driverRouter.get(
   authenticate(["driver"]),
   asyncHandler(getPendingRideOffers),
 );
+// Answers from the native full-screen offer card (RideOfferAnswerSender.kt).
+driverRouter.post("/ride-offers/:rideId/accept", authenticate(["driver"]), acceptRideOffer);
+driverRouter.post("/ride-offers/:rideId/reject", authenticate(["driver"]), rejectRideOffer);
 driverRouter.get(
   "/me",
   authenticate(["driver", "owner", "pooling_driver", "bus_driver", "service_center", "service_center_staff"], { allowPending: true }),
@@ -301,6 +304,11 @@ driverRouter.get(
 );
 driverRouter.post(
   "/scheduled-rides/:rideId/cancel",
+  authenticate(["driver"]),
+  asyncHandler(cancelDriverScheduledRide),
+);
+driverRouter.post(
+  "/rides/:rideId/cancel",
   authenticate(["driver"]),
   asyncHandler(cancelDriverScheduledRide),
 );

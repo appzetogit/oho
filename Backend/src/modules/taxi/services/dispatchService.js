@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import mongoose from 'mongoose';
+import { ApiError } from '../../../utils/ApiError.js';
 import { runRedisCommand } from '../../../infrastructure/redis/redisClient.js';
 import { Ride } from '../user/models/Ride.js';
 import { User } from '../user/models/User.js';
@@ -17,6 +18,7 @@ import { getRideRoom, resolveSetPriceForRide } from './rideService.js';
 import { SOCKET_EVENTS } from '../socket/events.js';
 import { resolveTransportDispatchConfig } from './transportSettingsService.js';
 import { sendPushNotificationToEntities } from './pushNotificationService.js';
+import { notifyRideCancelledByUser } from './rideNotificationService.js';
 
 const activeDispatches = new Map();
 let ioInstance = null;
@@ -375,7 +377,30 @@ const applyDriverWalletAdjustmentByReference = async ({
   return { status: 'applied', amount: normalizedAmount, walletResult };
 };
 
-const settleUserCancellationFee = async (ride, session) => {
+/// The fee applies only once the driver has reached the pickup (`arriving`).
+/// Cancelling while the driver is still on the way (`accepted`) is free for
+/// both sides; a scheduled ride that has not started moving is the same case.
+const isCancellationChargeable = (liveStatusAtCancel) =>
+  String(liveStatusAtCancel || '').trim().toLowerCase() === RIDE_LIVE_STATUS.ARRIVING;
+
+const recordCancellationFee = async (rideId, { amount, chargedTo, isPaid }) => {
+  if (!rideId || !(amount > 0)) return;
+  await Ride.updateOne(
+    { _id: rideId },
+    { $set: { cancellationFee: { amount: roundMoney(amount), chargedTo, isPaid: Boolean(isPaid) } } },
+  ).catch((error) => console.error('Could not record the cancellation fee on the ride', error));
+};
+
+const settleUserCancellationFee = async (ride, session, { liveStatusAtCancel } = {}) => {
+  // No fee while the ride was still searching: with no driver ever assigned
+  // there is nobody to compensate, and the rider would be charged for the
+  // platform failing to find them a car. This became load-bearing when the
+  // rider app started giving up on a search automatically after four minutes -
+  // without it, every unsuccessful search billed the rider.
+  if (!ride?.driverId || !isCancellationChargeable(liveStatusAtCancel)) {
+    return { feeAmount: 0, userDebitStatus: 'none', driverCreditStatus: 'none', driverWalletResult: null };
+  }
+
   const pricing = await resolveCancellationPricing(ride, session);
   const feeAmount = computeCancellationFeeAmount({
     ride,
@@ -421,6 +446,14 @@ const settleUserCancellationFee = async (ride, session) => {
     });
   }
 
+  // Recorded either way: when the wallet is short the fee is still owed, and
+  // the ride record is where an admin can see it outstanding.
+  await recordCancellationFee(ride._id, {
+    amount: feeAmount,
+    chargedTo: 'user',
+    isPaid: ['applied', 'existing'].includes(userDebit.status),
+  });
+
   return {
     feeAmount,
     userDebitStatus: userDebit.status,
@@ -429,7 +462,11 @@ const settleUserCancellationFee = async (ride, session) => {
   };
 };
 
-const settleDriverCancellationFee = async (ride, session) => {
+const settleDriverCancellationFee = async (ride, session, { liveStatusAtCancel } = {}) => {
+  if (!isCancellationChargeable(liveStatusAtCancel)) {
+    return { feeAmount: 0, driverDebitStatus: 'none', userCreditStatus: 'none', driverWalletResult: null };
+  }
+
   const pricing = await resolveCancellationPricing(ride, session);
   const feeAmount = computeCancellationFeeAmount({
     ride,
@@ -446,7 +483,7 @@ const settleDriverCancellationFee = async (ride, session) => {
     driverId: ride.driverId,
     amount: -feeAmount,
     rideId: ride._id,
-    description: `Scheduled ride cancellation fee for booking ${String(ride._id).slice(-6)}`,
+    description: `Ride cancellation fee for booking ${String(ride._id).slice(-6)}`,
     referenceKey: `${feeReferenceBase}:driver-debit`,
     metadata: {
       source: 'ride_cancellation_fee',
@@ -471,6 +508,12 @@ const settleDriverCancellationFee = async (ride, session) => {
     });
   }
 
+  await recordCancellationFee(ride._id, {
+    amount: feeAmount,
+    chargedTo: 'driver',
+    isPaid: ['applied', 'existing'].includes(driverDebit.status),
+  });
+
   return {
     feeAmount,
     driverDebitStatus: driverDebit.status,
@@ -485,6 +528,15 @@ export const getAdminRoom = () => 'admin:broadcast';
 
 export const setSocketServer = (io) => {
   ioInstance = io;
+  // A rejection can land on any API instance (the driver's socket or REST
+  // call is load-balanced), but the dispatch timer for the ride lives only on
+  // the instance running it. Each instance relays rejections to the others
+  // over the Redis adapter so the owner can move the ride on.
+  io.on(DRIVER_REJECTED_RELAY_EVENT, (payload = {}) => {
+    advanceDispatchAfterRejection(payload.rideId, payload.driverId).catch((error) => {
+      console.error('Failed to advance dispatch after relayed rejection', error);
+    });
+  });
 };
 
 export const getSocketServer = () => ioInstance;
@@ -819,6 +871,9 @@ const emitRideRequestToDrivers = async ({
         // drawable with the app killed and no network, so anything missing here
         // simply cannot be shown.
         fare: formatOfferFare(ride.fare),
+        // What the rider added with "book again" on top of the quoted fare
+        // (already inside `fare`), so the card can highlight it. "0" if none.
+        extraFare: formatOfferFare(Math.max(0, Number(ride.fare || 0) - Number(ride.baseFare || ride.fare || 0))),
         riderName: ride.userId?.name || 'Customer',
         pickupAddress: ride.pickupAddress || '',
         dropAddress: ride.dropAddress || '',
@@ -866,6 +921,8 @@ export const sendRideOfferClosedPush = (driverIds = [], rideId) => {
   });
 };
 
+const DRIVER_REJECTED_RELAY_EVENT = 'dispatch:driver-rejected';
+
 export const markDriverRejectedFromDispatch = async (rideId, driverId) => {
   if (!rideId || !driverId) {
     return;
@@ -876,6 +933,43 @@ export const markDriverRejectedFromDispatch = async (rideId, driverId) => {
 
   saveDispatchState(rideId, { rejectedDriverIds });
   await persistDispatchTrackingProgress({ rideId, rejectedDriverIds: [String(driverId)] });
+
+  await advanceDispatchAfterRejection(rideId, driverId);
+  try {
+    ioInstance?.serverSideEmit?.(DRIVER_REJECTED_RELAY_EVENT, {
+      rideId: String(rideId),
+      driverId: String(driverId),
+    });
+  } catch (error) {
+    // Single instance or no adapter: the local advance above is all there is.
+  }
+};
+
+/// Moves the ride on to the next driver as soon as everyone it is currently
+/// offered to has said no.
+///
+/// Before this, a rejection was only written down and the ride sat on the
+/// declining driver until the accept window (`trip_accept_reject_duration_for_driver`)
+/// ran out. Only the instance that owns the dispatch flow acts; on the others
+/// this is a no-op.
+const advanceDispatchAfterRejection = async (rideId, driverId) => {
+  if (!rideId || !driverId) return;
+  const rideKey = String(rideId);
+  if (!activeDispatches.has(rideKey)) return;
+
+  const state = getDispatchState(rideKey);
+  const currentTargets = state.driverIds.map(String);
+  // A late or repeated rejection for an offer that has already moved on.
+  if (!currentTargets.includes(String(driverId))) return;
+
+  const rejected = new Set([...state.rejectedDriverIds.map(String), String(driverId)]);
+  saveDispatchState(rideKey, { rejectedDriverIds: [...rejected] });
+  // Broadcast offers several drivers at once - wait while any is still deciding.
+  if (!currentTargets.every((id) => rejected.has(id))) return;
+
+  clearDispatchTimer(rideKey);
+  saveDispatchState(rideKey, { timer: null, driverIds: [] });
+  await dispatchAttempt(rideKey, state.radiusIndex + 1);
 };
 
 const closeRideAsUnmatched = async (rideId) => {
@@ -1021,6 +1115,13 @@ export const cancelRideByUser = async ({ rideId, userId, reason = '', reasonId =
     return existing;
   }
 
+  // Once the rider is in the car the trip can only be ended by completing it.
+  if ([RIDE_LIVE_STATUS.STARTED, RIDE_LIVE_STATUS.ARRIVED].includes(existing.liveStatus)) {
+    throw new ApiError(409, 'This trip has already started and can no longer be cancelled');
+  }
+
+  const liveStatusAtCancel = existing.liveStatus;
+
   const cancelUpdate = {
     status: RIDE_STATUS.CANCELLED,
     liveStatus: RIDE_LIVE_STATUS.CANCELLED,
@@ -1061,7 +1162,7 @@ export const cancelRideByUser = async ({ rideId, userId, reason = '', reasonId =
   // per-ride reference, so a retry cannot double-charge either way.
   let cancellationSettlement = null;
   try {
-    cancellationSettlement = await settleUserCancellationFee(ride);
+    cancellationSettlement = await settleUserCancellationFee(ride, null, { liveStatusAtCancel });
   } catch (error) {
     // A fee that cannot be settled must not leave the rider stuck in a ride
     // they already cancelled.
@@ -1094,6 +1195,18 @@ export const cancelRideByUser = async ({ rideId, userId, reason = '', reasonId =
       reason: 'user-cancelled',
       message: 'User cancelled the ride.',
     });
+  }
+
+  /// The socket emit above only lands if the driver's app is open. A driver
+  /// parked at the pickup point with a closed app would otherwise keep waiting
+  /// for a rider who is never coming, so push it to the tray as well.
+  if (ride.driverId) {
+    Ride.findById(ride._id)
+      .populate('userId', 'name')
+      .then((populated) => notifyRideCancelledByUser(populated || ride, trimmedReason))
+      .catch((error) => {
+        console.error('[push] ride-cancelled-by-user notification failed', error);
+      });
   }
 
   for (const driverId of dispatchState.notifiedDriverIds) {
@@ -1141,7 +1254,10 @@ export const cancelRideByUser = async ({ rideId, userId, reason = '', reasonId =
   return ride;
 };
 
-export const cancelScheduledRideByDriver = async ({ rideId, driverId }) => {
+/// A driver may cancel an accepted ride while heading to the pickup or while
+/// waiting at it (`accepted` / `arriving`), and an upcoming scheduled ride.
+/// Once the rider is on board the trip can only be completed.
+export const cancelRideByDriver = async ({ rideId, driverId, reason = '', reasonId = null, note = '' }) => {
   const dispatchState = getDispatchState(rideId);
   stopDispatchFlow(rideId, { releaseLease: false });
 
@@ -1162,18 +1278,9 @@ export const cancelScheduledRideByDriver = async ({ rideId, driverId }) => {
     return null;
   }
 
-  const scheduledAt = existing?.scheduledAt ? new Date(existing.scheduledAt) : null;
-  const isScheduledRide =
-    scheduledAt && Number.isFinite(scheduledAt.getTime()) && scheduledAt.getTime() > Date.now();
-
-  if (!isScheduledRide) {
-    stopDispatchFlow(rideId);
-    throw new Error('Only upcoming scheduled rides can be cancelled by the driver');
-  }
-
   if (existing.status === RIDE_STATUS.COMPLETED || existing.liveStatus === RIDE_LIVE_STATUS.COMPLETED) {
     stopDispatchFlow(rideId);
-    throw new Error('Completed rides cannot be cancelled');
+    throw new ApiError(409, 'Completed rides cannot be cancelled');
   }
 
   if (existing.status === RIDE_STATUS.CANCELLED || existing.liveStatus === RIDE_LIVE_STATUS.CANCELLED) {
@@ -1181,11 +1288,23 @@ export const cancelScheduledRideByDriver = async ({ rideId, driverId }) => {
     return existing;
   }
 
+  const scheduledAt = existing?.scheduledAt ? new Date(existing.scheduledAt) : null;
+  const isUpcomingScheduledRide =
+    scheduledAt && Number.isFinite(scheduledAt.getTime()) && scheduledAt.getTime() > Date.now();
+  const isBeforePickup = [RIDE_LIVE_STATUS.ACCEPTED, RIDE_LIVE_STATUS.ARRIVING].includes(existing.liveStatus);
+
+  if (!isUpcomingScheduledRide && !isBeforePickup) {
+    stopDispatchFlow(rideId);
+    throw new ApiError(409, 'This trip has already started and can no longer be cancelled');
+  }
+
+  const liveStatusAtCancel = existing.liveStatus;
+
   const cancelUpdate = {
     status: RIDE_STATUS.CANCELLED,
     liveStatus: RIDE_LIVE_STATUS.CANCELLED,
     cancelledAt: new Date(),
-    cancelledBy: 'user',
+    cancelledBy: 'driver',
   };
 
   // Recorded only when supplied, so a client that cancels without picking a
@@ -1217,7 +1336,7 @@ export const cancelScheduledRideByDriver = async ({ rideId, driverId }) => {
 
   let cancellationSettlement = null;
   try {
-    cancellationSettlement = await settleDriverCancellationFee(ride);
+    cancellationSettlement = await settleDriverCancellationFee(ride, null, { liveStatusAtCancel });
   } catch (error) {
     console.error('Could not settle the driver cancellation fee', error);
   }
@@ -1236,12 +1355,22 @@ export const cancelScheduledRideByDriver = async ({ rideId, driverId }) => {
 
   await persistDispatchTrackingProgress({ rideId, reset: true }).catch(() => null);
 
-  const cancelReason = 'Your scheduled ride was cancelled by the driver.';
+  const cancelReason = isUpcomingScheduledRide
+    ? 'Your scheduled ride was cancelled by the driver.'
+    : 'Your driver cancelled the ride. Please book again.';
 
   emitToRoom(getUserRoom(ride.userId), 'rideCancelled', {
     rideId: String(ride._id),
     room: getRideRoom(ride._id),
     reason: cancelReason,
+    cancelledBy: 'driver',
+  });
+
+  emitToRoom(getRideRoom(ride._id), 'rideCancelled', {
+    rideId: String(ride._id),
+    room: getRideRoom(ride._id),
+    reason: cancelReason,
+    cancelledBy: 'driver',
   });
 
   emitToRoom(getRideRoom(ride._id), 'rideRequestClosed', {
@@ -1254,7 +1383,7 @@ export const cancelScheduledRideByDriver = async ({ rideId, driverId }) => {
     emitToRoom(getDriverRoom(ride.driverId), 'rideRequestClosed', {
       rideId: String(ride._id),
       reason: 'driver-cancelled',
-      message: 'Scheduled ride cancelled.',
+      message: 'Ride cancelled.',
     });
   }
 
@@ -1279,7 +1408,7 @@ export const cancelScheduledRideByDriver = async ({ rideId, driverId }) => {
       notification: {
         id: `ride-cancel-debit-${String(ride._id)}`,
         title: 'Cancellation fee charged',
-        body: `Rs ${Number(cancellationSettlement.feeAmount || 0).toFixed(2)} deducted for scheduled ride cancellation.`,
+        body: `Rs ${Number(cancellationSettlement.feeAmount || 0).toFixed(2)} deducted for cancelling at the pickup.`,
         sentAt: new Date().toISOString(),
       },
     });
@@ -1287,7 +1416,7 @@ export const cancelScheduledRideByDriver = async ({ rideId, driverId }) => {
 
   sendPushNotificationToEntities({
     userIds: [String(ride.userId)],
-    title: 'Scheduled ride cancelled',
+    title: isUpcomingScheduledRide ? 'Scheduled ride cancelled' : 'Ride cancelled by driver',
     body: cancelReason,
     data: {
       type: 'ride_cancelled_by_driver',

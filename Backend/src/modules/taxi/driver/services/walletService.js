@@ -317,65 +317,72 @@ export const grantDriverJoiningBonus = async ({ driverId, grantedBy = null }) =>
   }
 };
 
+/**
+ * Add money a driver has paid in to their wallet.
+ *
+ * No transaction: this database is a standalone MongoDB, which cannot start
+ * one, so every call that opened a transaction failed outright. Nothing is lost
+ * by dropping it here — the only write is the wallet adjustment itself, and the
+ * checks above it read settings rather than change anything.
+ */
 export const topUpDriverWallet = async ({ driverId, amount, metadata = {} }) => {
-  const session = await mongoose.startSession();
-
-  try {
-    session.startTransaction();
-
-    const walletSettings = await getWalletSettings();
-    if (!isEnabledSetting(walletSettings.show_wallet_feature_for_driver, true)) {
-      throw new ApiError(403, 'Driver wallet is disabled by admin');
-    }
-
-    const minimumTopUpAmount = toNonNegativeNumber(walletSettings.minimum_amount_added_to_wallet, 0);
-    const normalizedTopUpAmount = Math.abs(normalizeAmount(amount));
-
-    if (minimumTopUpAmount > 0 && normalizedTopUpAmount < minimumTopUpAmount) {
-      throw new ApiError(400, `amount must be at least ${minimumTopUpAmount}`);
-    }
-
-    const result = await applyDriverWalletAdjustment({
-      driverId,
-      amount: normalizedTopUpAmount,
-      type: 'top_up',
-      description: 'Driver wallet top-up',
-      metadata: {
-        ...metadata,
-        minimumTopUpAmount,
-      },
-      session,
-    });
-
-    await session.commitTransaction();
-    return result;
-  } catch (error) {
-    await session.abortTransaction();
-    throw error;
-  } finally {
-    session.endSession();
+  const walletSettings = await getWalletSettings();
+  if (!isEnabledSetting(walletSettings.show_wallet_feature_for_driver, true)) {
+    throw new ApiError(403, 'Driver wallet is disabled by admin');
   }
+
+  const minimumTopUpAmount = toNonNegativeNumber(walletSettings.minimum_amount_added_to_wallet, 0);
+  const normalizedTopUpAmount = Math.abs(normalizeAmount(amount));
+
+  if (minimumTopUpAmount > 0 && normalizedTopUpAmount < minimumTopUpAmount) {
+    throw new ApiError(400, `amount must be at least ${minimumTopUpAmount}`);
+  }
+
+  return applyDriverWalletAdjustment({
+    driverId,
+    amount: normalizedTopUpAmount,
+    type: 'top_up',
+    description: 'Driver wallet top-up',
+    metadata: {
+      ...metadata,
+      minimumTopUpAmount,
+    },
+  });
 };
 
+/**
+ * Settle a finished ride: take commission from a cash ride, or credit the
+ * driver's earnings on an online one.
+ *
+ * No transaction: production is a standalone MongoDB, which cannot start one,
+ * so a transaction here threw every time and no ride was ever settled. Instead
+ * the ride is claimed first by stamping walletSettledAt in a single atomic
+ * update, so only one caller can ever settle a given ride; if a wallet write
+ * then fails, the stamp is cleared so the ride can be retried.
+ *
+ * An online ride writes two ledger rows. Without a transaction the first can
+ * land and the second fail, so each row is skipped on retry when the ride
+ * already has one of that type — a retry finishes the settlement instead of
+ * crediting the fare twice.
+ */
 export const settleCompletedRideWallet = async ({ rideId }) => {
-  const session = await mongoose.startSession();
+  const ride = await Ride.findOneAndUpdate(
+    { _id: rideId, walletSettledAt: null, driverId: { $ne: null } },
+    { $set: { walletSettledAt: new Date() } },
+    { returnDocument: 'after' },
+  );
+
+  if (!ride) {
+    return null;
+  }
+
+  const releaseClaim = async () => {
+    await Ride.updateOne({ _id: rideId }, { $set: { walletSettledAt: null } });
+  };
 
   try {
-    session.startTransaction();
-
-    const ride = await Ride.findOneAndUpdate(
-      { _id: rideId, walletSettledAt: null, driverId: { $ne: null } },
-      { $set: { walletSettledAt: new Date() } },
-      { returnDocument: 'after', session },
-    );
-
-    if (!ride) {
-      await session.commitTransaction();
-      return null;
-    }
-
     const fare = normalizeAmount(ride.fare || 0, 'fare');
-    const commissionConfig = await resolveCommissionConfigForRide(ride, session);
+    const commissionConfig = await resolveCommissionConfigForRide(ride);
     const commissionAmount = computeCommissionAmount({
       fare,
       type: commissionConfig.type,
@@ -393,7 +400,7 @@ export const settleCompletedRideWallet = async ({ rideId }) => {
       admin_commission_from_driver: Number(commissionConfig.value ?? ride.pricingSnapshot?.admin_commission_from_driver ?? 0),
       resolvedAt: ride.pricingSnapshot?.resolvedAt || new Date(),
     };
-    await ride.save({ session });
+    await ride.save();
 
     const sharedMetadata = {
       fare,
@@ -403,6 +410,20 @@ export const settleCompletedRideWallet = async ({ rideId }) => {
       commissionSource: commissionConfig.source,
       commissionType: normalizeCommissionType(commissionConfig.type),
       commissionValue: Number(commissionConfig.value || 0),
+    };
+
+    const applyRideLeg = async ({ amount, type, description }) => {
+      if (await WalletTransaction.exists({ rideId: ride._id, type })) {
+        return null;
+      }
+      return applyDriverWalletAdjustment({
+        driverId: ride.driverId,
+        rideId: ride._id,
+        amount,
+        type,
+        description,
+        metadata: sharedMetadata,
+      });
     };
 
     // Two separate ledger rows so the driver's wallet history shows exactly what
@@ -415,57 +436,48 @@ export const settleCompletedRideWallet = async ({ rideId }) => {
       // The driver already holds the cash fare in hand; only the commission
       // ever touches the wallet.
       if (commissionAmount > 0) {
-        commissionResult = await applyDriverWalletAdjustment({
-          driverId: ride.driverId,
-          rideId: ride._id,
+        commissionResult = await applyRideLeg({
           amount: -commissionAmount,
           type: 'commission_deduction',
           description: 'Commission deducted for cash ride',
-          metadata: sharedMetadata,
-          session,
         });
       }
     } else {
       if (fare > 0) {
-        earningResult = await applyDriverWalletAdjustment({
-          driverId: ride.driverId,
-          rideId: ride._id,
+        earningResult = await applyRideLeg({
           amount: fare,
           type: 'ride_earning',
           description: 'Driver earning credited for online ride',
-          metadata: sharedMetadata,
-          session,
         });
       }
 
       if (commissionAmount > 0) {
-        commissionResult = await applyDriverWalletAdjustment({
-          driverId: ride.driverId,
-          rideId: ride._id,
+        commissionResult = await applyRideLeg({
           amount: -commissionAmount,
           type: 'commission_deduction',
           description: 'Commission deducted for online ride',
-          metadata: sharedMetadata,
-          session,
         });
       }
     }
 
-    await session.commitTransaction();
+    // Nothing moved (a free ride, or zero commission on cash): the ride stays settled.
+    if (!earningResult && !commissionResult) {
+      return null;
+    }
 
     const latestResult = commissionResult || earningResult;
     return {
-      driver: latestResult?.driver ?? null,
-      wallet: latestResult?.wallet ?? null,
-      transaction: (commissionResult ?? earningResult)?.transaction ?? null,
+      driver: latestResult.driver,
+      wallet: latestResult.wallet,
+      transaction: latestResult.transaction,
       earningTransaction: earningResult?.transaction ?? null,
       commissionTransaction: commissionResult?.transaction ?? null,
       ride,
     };
   } catch (error) {
-    await session.abortTransaction();
+    // Rows already written are skipped on the retry, so the ride can safely be
+    // settled again later.
+    await releaseClaim();
     throw error;
-  } finally {
-    session.endSession();
   }
 };

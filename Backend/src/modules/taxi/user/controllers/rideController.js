@@ -17,6 +17,7 @@ import {
   getRideDetails,
   getRideRoom,
   increaseRideBidCeiling,
+  enableRideFareIncrease,
   listRideBidsForUser,
   listRideHistoryForIdentity,
   serializeRideRealtime,
@@ -414,6 +415,7 @@ export const updateRideStatus = async (req, res) => {
     driverId: req.auth.sub,
     nextStatus,
     paymentMethod: req.body.paymentMethod,
+    otp: req.body.otp,
   });
 
   try {
@@ -1029,11 +1031,10 @@ export const listAvailableDrivers = async (req, res) => {
   const longitude = Number(lng);
   const distance = Number(maxDistance);
 
-  if (!vehicleTypeId) {
-    throw new ApiError(400, 'vehicleTypeId is required');
-  }
-
-  if (!mongoose.Types.ObjectId.isValid(vehicleTypeId)) {
+  // Optional: without it this answers "every online driver around this
+  // point", which is what the rider app's map of nearby vehicles asks for.
+  // Requiring it made that map permanently empty, since it has no single type.
+  if (vehicleTypeId && !mongoose.Types.ObjectId.isValid(vehicleTypeId)) {
     throw new ApiError(400, 'vehicleTypeId is invalid');
   }
 
@@ -1049,7 +1050,7 @@ export const listAvailableDrivers = async (req, res) => {
   const matchOptions = {
     maxDistance: Number.isFinite(distance) && distance > 0 ? Math.min(distance, 25000) : 25000,
     limit: Math.min(Number(limit) || 30, 50),
-    vehicleTypeId,
+    ...(vehicleTypeId ? { vehicleTypeId } : {}),
   };
 
   let matchResult = await matchDrivers([longitude, latitude], {
@@ -1135,6 +1136,20 @@ export const acceptRideBid = async (req, res) => {
       liveStatus: ride.liveStatus,
       acceptedAt: ride.acceptedAt,
     },
+  });
+};
+
+export const enableRideFareIncreaseController = async (req, res) => {
+  const ride = await enableRideFareIncrease({
+    rideId: req.params.rideId,
+    userId: req.auth.sub,
+  });
+
+  await notifyRideBiddingUpdated(ride.rideId || req.params.rideId);
+
+  res.json({
+    success: true,
+    data: ride,
   });
 };
 
