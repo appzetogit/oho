@@ -111,10 +111,15 @@ const buildCompletionAmounts = (ride, tipAmount = 0) => {
 };
 
 const validateRideCompletionFeedback = async ({ rating, tipAmount }) => {
-  const numericRating = Number(rating);
   const numericTip = roundMoney(tipAmount || 0);
 
-  if (!Number.isInteger(numericRating) || numericRating < 1 || numericRating > 5) {
+  // A rating is optional. It used to be mandatory, and the rider app's payment
+  // sheet sends none, so "Pay online" and "Pay from wallet" were both refused
+  // with 400. A rating that IS sent must still be a whole number from 1 to 5.
+  const hasRating = rating !== undefined && rating !== null && rating !== '' && Number(rating) !== 0;
+  const numericRating = hasRating ? Number(rating) : null;
+
+  if (hasRating && (!Number.isInteger(numericRating) || numericRating < 1 || numericRating > 5)) {
     throw new ApiError(400, 'rating must be an integer between 1 and 5');
   }
 
@@ -180,7 +185,7 @@ const finalizeRideCompletion = async ({
     throw new ApiError(409, 'Feedback already submitted for this ride');
   };
 
-  if (ride.feedback?.submittedAt) {
+  if (isDriverCollectionPaid(ride)) {
     return alreadySubmitted(ride);
   }
 
@@ -189,9 +194,20 @@ const finalizeRideCompletion = async ({
   // update, so two requests for the same ride cannot both charge the rider or
   // credit the driver. Until the driver is credited, any failure refunds the
   // rider and releases the claim so the rider can simply try again.
-  const claim = await Ride.updateOne(
-    { _id: ride._id, 'feedback.submittedAt': null },
-    { $set: { 'feedback.submittedAt': new Date() } },
+  // Claimed on its own field, not feedback.submittedAt: a review left before
+  // paying set that too, and then the ride could never be paid. A claim older
+  // than two minutes is treated as abandoned so a crash cannot lock a ride.
+  const claimNow = new Date();
+  const claim = await Ride.collection.updateOne(
+    {
+      _id: ride._id,
+      'driverPaymentCollection.status': { $ne: 'paid' },
+      $or: [
+        { completionClaimAt: null },
+        { completionClaimAt: { $lt: new Date(claimNow.getTime() - 2 * 60 * 1000) } },
+      ],
+    },
+    { $set: { completionClaimAt: claimNow } },
   );
   if (!claim.modifiedCount) {
     const current = await Ride.findById(ride._id);
@@ -216,7 +232,7 @@ const finalizeRideCompletion = async ({
     // them twice; before that, put everything back.
     if (!driverCredited) {
       if (undoPayment) await undoPayment().catch(() => null);
-      await Ride.updateOne({ _id: ride._id }, { $set: { 'feedback.submittedAt': null } }).catch(() => null);
+      await Ride.collection.updateOne({ _id: ride._id }, { $unset: { completionClaimAt: '' } }).catch(() => null);
     }
     throw error;
   }
@@ -296,17 +312,31 @@ const settleRideCompletion = async ({
     };
   }
 
+  const givenRating = Number.isInteger(Number(rating)) && Number(rating) >= 1 && Number(rating) <= 5
+    ? Number(rating)
+    : null;
+  const alreadyRated = Number.isInteger(Number(ride.feedback?.rating)) && Number(ride.feedback?.rating) >= 1;
+
   ride.feedback = {
-    rating,
-    comment: String(comment || '').trim(),
+    rating: alreadyRated ? Number(ride.feedback.rating) : givenRating,
+    comment: alreadyRated ? (ride.feedback.comment || '') : String(comment || '').trim(),
     tipAmount,
     tipPaymentId: paymentRecord?.providerPaymentId || '',
     tipOrderId: paymentRecord?.providerOrderId || '',
     tipPaidAt: paymentRecord?.providerPaymentId ? (paymentRecord?.paidAt || new Date()) : null,
-    submittedAt: new Date(),
+    submittedAt: ride.feedback?.submittedAt || new Date(),
   };
 
   await ride.save();
+
+  // Paid without a rating, or already rated before paying: the driver's
+  // average stays as it is.
+  if (givenRating === null || alreadyRated) {
+    return {
+      ride: await getRideDetails(ride._id),
+      walletResult,
+    };
+  }
 
   // One pipeline update, so concurrent ratings for the same driver cannot
   // overwrite each other's count.
@@ -314,7 +344,7 @@ const settleRideCompletion = async ({
     {
       $set: {
         ratingCount: { $add: [{ $ifNull: ['$ratingCount', 0] }, 1] },
-        totalRatingScore: { $add: [{ $ifNull: ['$totalRatingScore', 0] }, rating] },
+        totalRatingScore: { $add: [{ $ifNull: ['$totalRatingScore', 0] }, givenRating] },
       },
     },
     { $set: { rating: { $round: [{ $divide: ['$totalRatingScore', '$ratingCount'] }, 1] } } },
@@ -534,8 +564,10 @@ export const createRazorpayRideCompletionOrder = async (req, res) => {
 
   const ride = await loadCompletedRideForUser(rideId, req.auth.sub);
 
-  if (ride.feedback?.submittedAt) {
-    throw new ApiError(409, 'Feedback already submitted for this ride');
+  // Refuse only if the ride is already paid. A review on its own used to block
+  // payment, so a rider who rated before paying could never pay.
+  if (isDriverCollectionPaid(ride) && !(Number(tipAmount) > 0)) {
+    throw new ApiError(409, 'This ride has already been paid');
   }
 
   const { keyId, keySecret } = await resolveRazorpayCredentials();
