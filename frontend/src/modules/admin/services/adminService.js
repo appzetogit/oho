@@ -5,6 +5,17 @@ export const adminService = {
    * Admin Authentication
    */
   login: (credentials) => api.post('/admin/login', credentials),
+
+  /**
+   * Rider coins
+   */
+  getCoinSettings: () => api.get('/admin/coins/settings'),
+  updateCoinSettings: (data) => api.put('/admin/coins/settings', data),
+  getCoinSummary: () => api.get('/admin/coins/summary'),
+  getRiderCoinAccounts: (params = {}) => api.get('/admin/coins/riders', { params }),
+  getRiderCoinTransactions: (userId) => api.get(`/admin/coins/riders/${userId}/transactions`),
+  adjustRiderCoins: (userId, data) => api.post(`/admin/coins/riders/${userId}/adjust`, data),
+
   forgotPassword: (email) => api.post('/admin/forgot-password', { email }),
   verifyResetOtp: (data) => api.post('/admin/verify-reset-otp', data),
   resetPassword: (data) => api.post('/admin/reset-password', data),

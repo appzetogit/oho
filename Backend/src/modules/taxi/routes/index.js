@@ -7,6 +7,7 @@ import { userModuleRouter } from '../user/routes/index.js';
 import { commonRouter } from '../common/routes/commonRoutes.js';
 import { careerRouter } from '../career/routes/careerRoutes.js';
 import { legacyCompatRouter } from '../compat/legacyCompatRoutes.js';
+import { coinsRouter } from '../coins/routes/coinRoutes.js';
 import { captureFcmTokenOnAuth, FCM_CAPTURE_PATHS } from '../middlewares/captureFcmTokenOnAuth.js';
 
 export const taxiRouter = Router();
@@ -14,6 +15,8 @@ export const taxiRouter = Router();
 // First, so it wraps the real sign-in handlers below.
 taxiRouter.use(FCM_CAPTURE_PATHS, captureFcmTokenOnAuth);
 
+// Before the admin and user routers, so neither can swallow its paths.
+taxiRouter.use(coinsRouter);
 taxiRouter.use(chatModuleRouter);
 taxiRouter.use(adminModuleRouter);
 taxiRouter.use(userModuleRouter);

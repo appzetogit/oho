@@ -171,6 +171,7 @@ export const AdminReferralTranslation = lazy(() => import('../modules/admin/page
 export const AdminPromoCodes = lazy(() => import('../modules/admin/pages/promotions/PromoCodes'));
 export const AdminSendNotification = lazy(() => import('../modules/admin/pages/promotions/SendNotification'));
 export const AdminBannerImage = lazy(() => import('../modules/admin/pages/promotions/BannerImage'));
+export const AdminRiderCoins = lazy(() => import('../modules/admin/pages/promotions/RiderCoins'));
 export const AdminServiceLocation = lazy(() => import('../modules/admin/pages/price-management/ServiceLocation'));
 export const AdminServiceStores = lazy(() => import('../modules/admin/pages/price-management/ServiceStores'));
 export const AdminPendingServiceStores = lazy(() => import('../modules/admin/pages/price-management/PendingServiceStores'));

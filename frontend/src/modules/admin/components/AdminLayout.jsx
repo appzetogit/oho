@@ -844,6 +844,7 @@ const AdminLayout = () => {
               { label: 'Promo Code', path: '/admin/promotions/promo-codes', permission: 'promotions.view' },
               { label: 'Push Notifications', path: '/admin/promotions/send-notification', permission: 'promotions.view' },
               { label: 'Banner Image', path: '/admin/promotions/banner-image', permission: 'promotions.view' },
+              { label: 'Rider Coins', path: '/admin/promotions/rider-coins', permission: 'promotions.view' },
             ],
           },
           {
