@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ChevronRight, Eye, FileSearch, QrCode, Search } from 'lucide-react';
+import { Check, ChevronRight, Eye, FileSearch, FileSpreadsheet, QrCode, Search, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import { adminService } from '../../services/adminService';
+import WithdrawalExportModal from './WithdrawalExportModal';
 
 const BASE = () => `${globalThis.__LEGACY_BACKEND_ORIGIN__}/api/v1/admin/wallet/drivers/withdrawals`;
 
@@ -19,6 +22,9 @@ const WithdrawalRequestDrivers = () => {
   const [rows, setRows] = useState([]);
   const [paginator, setPaginator] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Which driver row is mid-approval, so its buttons can be disabled.
+  const [busyDriverId, setBusyDriverId] = useState(null);
+  const [exporting, setExporting] = useState(false);
 
   const fetchRows = async ({
     nextPage = page,
@@ -65,6 +71,49 @@ const WithdrawalRequestDrivers = () => {
     fetchRows({ nextPage: page, nextLimit: itemsPerPage, nextSearch: searchTerm });
   }, [page]);
 
+  // Approve or reject straight from this list. Staff had to open the detail page
+  // and find a menu that only appeared on pending rows, so the list looked as if
+  // it had no way to pay anyone.
+  const handleDecision = async (item, decision) => {
+    const requestId = item.latest_request_id;
+    if (!requestId) {
+      toast.error('This row has no pending request to act on. Open the details to see its history.');
+      return;
+    }
+
+    const name = item.driver?.name || 'this driver';
+    const amount = Number(item.pending_amount || 0).toFixed(2);
+    const payTo =
+      item.driver?.bankDetails?.accountHolderName ||
+      item.driver?.bankDetails?.upiId ||
+      item.driver?.bankDetails?.accountNumber ||
+      'the details on file';
+
+    const confirmed = window.confirm(
+      decision === 'approve'
+        ? `Approve ₹${amount} for ${name}?\n\nPaying out to: ${payTo}\n\nThe amount is taken out of the driver's wallet straight away and this cannot be undone. Make the bank transfer yourself.`
+        : `Reject the ₹${amount} request from ${name}?\n\nTheir wallet is not touched and they can ask again.`,
+    );
+    if (!confirmed) return;
+
+    setBusyDriverId(item.driver_id);
+    try {
+      if (decision === 'approve') {
+        await adminService.approveDriverWithdrawalRequest(requestId);
+        toast.success(`Approved ₹${amount} for ${name}`);
+      } else {
+        await adminService.rejectDriverWithdrawalRequest(requestId);
+        toast.success(`Rejected the request from ${name}`);
+      }
+      await fetchRows({ nextPage: page, nextLimit: itemsPerPage, nextSearch: searchTerm });
+    } catch (error) {
+      const message = error?.response?.data?.message || error?.message || 'Something went wrong';
+      toast.error(`Could not ${decision} this request: ${message}`);
+    } finally {
+      setBusyDriverId(null);
+    }
+  };
+
   const totalPages = useMemo(() => Math.max(1, Number(paginator?.last_page || 1)), [paginator]);
   const safePage = useMemo(() => Math.min(Math.max(1, page), totalPages), [page, totalPages]);
   const totalEntries = useMemo(() => Number(paginator?.total || 0), [paginator]);
@@ -81,8 +130,16 @@ const WithdrawalRequestDrivers = () => {
           <ChevronRight size={12} />
           <span className="text-gray-700">Withdrawal Request Drivers</span>
         </div>
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-xl text-gray-900 font-bold">Withdrawal Request Drivers</h1>
+          <button
+            type="button"
+            onClick={() => setExporting(true)}
+            className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700 shadow-sm"
+          >
+            <FileSpreadsheet size={16} />
+            Export for bank
+          </button>
         </div>
       </div>
 
@@ -189,21 +246,44 @@ const WithdrawalRequestDrivers = () => {
                         Requested
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-right">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          navigate(
-                            `/admin/drivers/wallet/withdrawals/${item.driver_id}${
-                              item.latest_request_id ? `?requestId=${item.latest_request_id}` : ''
-                            }`,
-                          )
-                        }
-                        className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors shadow-sm"
-                      >
-                        <Eye size={16} />
-                        View details
-                      </button>
+                    <td className="px-6 py-4">
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleDecision(item, 'approve')}
+                          disabled={busyDriverId === item.driver_id || !item.latest_request_id}
+                          title="Approve and deduct from the driver's wallet"
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 transition-colors shadow-sm disabled:opacity-50 disabled:hover:bg-emerald-600"
+                        >
+                          <Check size={16} />
+                          {busyDriverId === item.driver_id ? 'Working...' : 'Approve'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDecision(item, 'reject')}
+                          disabled={busyDriverId === item.driver_id || !item.latest_request_id}
+                          title="Reject this request; the wallet is not touched"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 transition-colors shadow-sm disabled:opacity-50"
+                        >
+                          <X size={16} />
+                          Reject
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            navigate(
+                              `/admin/drivers/wallet/withdrawals/${item.driver_id}${
+                                item.latest_request_id ? `?requestId=${item.latest_request_id}` : ''
+                              }`,
+                            )
+                          }
+                          title="Bank details and past requests"
+                          className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors shadow-sm"
+                        >
+                          <Eye size={16} />
+                          Details
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -237,6 +317,7 @@ const WithdrawalRequestDrivers = () => {
           </div>
         </div>
       </div>
+      {exporting ? <WithdrawalExportModal onClose={() => setExporting(false)} /> : null}
     </div>
   );
 };
