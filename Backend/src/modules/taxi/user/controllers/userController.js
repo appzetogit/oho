@@ -4,6 +4,8 @@ import { Env, StandardCheckoutClient, StandardCheckoutPayRequest, PrefillUserLog
 import { ApiError } from '../../../../utils/ApiError.js';
 import { asyncHandler } from '../../../../utils/asyncHandler.js';
 import { User } from '../models/User.js';
+import { Ride } from '../models/Ride.js';
+import { RIDE_STATUS } from '../../constants/index.js';
 import { createWebsiteBookingRequest } from '../services/websiteBookingService.js';
 import { UserWallet } from '../models/UserWallet.js';
 import { AdminBusinessSetting } from '../../admin/models/AdminBusinessSetting.js';
@@ -1906,6 +1908,73 @@ export const saveUserFcmToken = async (req, res) => {
       message: 'FCM token saved successfully',
       platform: saved.platform,
       field: saved.fieldName,
+    },
+  });
+};
+
+export const getMyReferrals = async (req, res) => {
+  const user = await User.findById(req.auth.sub).select('referralCode referralCount referredBy referralRewardGrantedAt').lean();
+  if (!user) {
+    throw new ApiError(404, 'User not found');
+  }
+
+  const settingsDoc = await AdminBusinessSetting.findOne({ scope: 'default' }).select('referral').lean();
+  const userSettings = settingsDoc?.referral?.user || {};
+  const type = String(userSettings.type || 'instant_referrer').trim().toLowerCase();
+  const isConditional = ['conditional_referrer', 'conditional_referrer_new'].includes(type);
+  const targetRideCount = isConditional ? Math.max(1, Number(userSettings.ride_count || 0) || 1) : 0;
+
+  const referred = await User.find({ referredBy: req.auth.sub })
+    .select('name phone createdAt referralRewardGrantedAt')
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const completed = new Map();
+  if (referred.length > 0) {
+    const rows = await Ride.aggregate([
+      { $match: { userId: { $in: referred.map((item) => item._id) }, status: RIDE_STATUS.COMPLETED } },
+      { $group: { _id: '$userId', count: { $sum: 1 } } },
+    ]);
+    rows.forEach((row) => completed.set(String(row._id), row.count));
+  }
+
+  const maskPhone = (value = '') => {
+    const digits = String(value || '');
+    return digits.length > 4 ? `${'*'.repeat(digits.length - 4)}${digits.slice(-4)}` : digits;
+  };
+
+  let myReferral = null;
+  if (user.referredBy) {
+    const referrer = await User.findById(user.referredBy).select('name phone').lean();
+    const myCompletedRides = await Ride.countDocuments({ userId: req.auth.sub, status: RIDE_STATUS.COMPLETED });
+    myReferral = {
+      referrerName: referrer?.name || 'Friend',
+      referrerPhone: maskPhone(referrer?.phone),
+      completedRides: myCompletedRides,
+      targetRideCount,
+      rewardGranted: Boolean(user.referralRewardGrantedAt),
+    };
+  }
+
+  res.json({
+    success: true,
+    data: {
+      myReferral,
+      referralCode: user.referralCode || '',
+      enabled: Boolean(userSettings.enabled),
+      type,
+      rewardAmount: Math.max(0, Number(userSettings.amount || 0) || 0),
+      targetRideCount,
+      totalReferred: referred.length,
+      referrals: referred.map((item) => ({
+        id: String(item._id),
+        name: item.name || 'Friend',
+        phone: maskPhone(item.phone),
+        joinedAt: item.createdAt || null,
+        completedRides: completed.get(String(item._id)) || 0,
+        targetRideCount,
+        rewardEarned: Boolean(item.referralRewardGrantedAt),
+      })),
     },
   });
 };

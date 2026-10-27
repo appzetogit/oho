@@ -9841,6 +9841,86 @@ export const goOffline = async (req, res) => {
   });
 };
 
+export const getDriverReferrals = async (req, res) => {
+  const driver = await Driver.findById(req.auth.sub).select("referralCode referralCount phone name referredBy referralRewardGrantedAt");
+
+  if (!driver) {
+    throw new ApiError(404, "Driver not found");
+  }
+
+  if (!String(driver.referralCode || "").trim()) {
+    driver.referralCode = generateDriverReferralCode(driver);
+    await driver.save();
+  }
+
+  const settingsDoc = await AdminBusinessSetting.findOne({ scope: "default" }).select("referral").lean();
+  const driverSettings = settingsDoc?.referral?.driver || {};
+  const type = String(driverSettings.type || "instant_referrer").trim().toLowerCase();
+  const isConditional = ["conditional_referrer", "conditional_referrer_new"].includes(type);
+  const targetRideCount = isConditional
+    ? Math.max(1, Number(driverSettings.ride_count || 0) || 1)
+    : 0;
+
+  const referred = await Driver.find({ referredBy: driver._id })
+    .select("name phone createdAt referralRewardGrantedAt")
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const completedByDriver = new Map();
+  if (referred.length > 0) {
+    const counts = await Ride.aggregate([
+      { $match: { driverId: { $in: referred.map((item) => item._id) }, status: RIDE_STATUS.COMPLETED } },
+      { $group: { _id: "$driverId", count: { $sum: 1 } } },
+    ]);
+    counts.forEach((row) => completedByDriver.set(String(row._id), row.count));
+  }
+
+  const maskPhone = (value = "") => {
+    const digits = String(value || "");
+    return digits.length > 4 ? `${"*".repeat(digits.length - 4)}${digits.slice(-4)}` : digits;
+  };
+
+  // The other direction: if this driver joined with someone's code, show them
+  // their own progress towards the target that unlocks that person's reward.
+  let myReferral = null;
+  if (driver.referredBy) {
+    const referrer = await Driver.findById(driver.referredBy).select("name phone").lean();
+    const myCompletedRides = await Ride.countDocuments({ driverId: driver._id, status: RIDE_STATUS.COMPLETED });
+    myReferral = {
+      referrerName: referrer?.name || "Driver",
+      referrerPhone: maskPhone(referrer?.phone),
+      completedRides: myCompletedRides,
+      targetRideCount,
+      rewardGranted: Boolean(driver.referralRewardGrantedAt),
+    };
+  }
+
+  res.json({
+    success: true,
+    data: {
+      myReferral,
+      referralCode: driver.referralCode || "",
+      enabled: Boolean(driverSettings.enabled),
+      type,
+      rewardAmount: Math.max(0, Number(driverSettings.amount || 0) || 0),
+      targetRideCount,
+      totalReferred: referred.length,
+      referrals: referred.map((item) => {
+        const completedRides = completedByDriver.get(String(item._id)) || 0;
+        return {
+          id: String(item._id),
+          name: item.name || "Driver",
+          phone: maskPhone(item.phone),
+          joinedAt: item.createdAt || null,
+          completedRides,
+          targetRideCount,
+          rewardEarned: Boolean(item.referralRewardGrantedAt),
+        };
+      }),
+    },
+  });
+};
+
 export const getDriverIncentives = async (req, res) => {
   const driver = await Driver.findById(req.auth.sub).lean();
 
