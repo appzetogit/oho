@@ -202,6 +202,17 @@ const GodsEye = () => {
     });
   }, [drivers, filters, searchQuery]);
 
+  // The zones drivers are actually assigned to, so the picker never offers a
+  // zone with nobody in it.
+  const zoneOptions = useMemo(() => {
+    const names = new Set();
+    drivers.forEach((d) => {
+      const name = String(d.zone_name || '').trim();
+      if (name) names.add(name);
+    });
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [drivers]);
+
   // Timelines
   const timelineEvents = useMemo(() => {
     const events = [];
@@ -339,6 +350,20 @@ const GodsEye = () => {
                      <option value="car">Car (Taxi)</option>
                      <option value="bike">Bike</option>
                      <option value="auto">Auto</option>
+                  </select>
+               </div>
+
+               <div>
+                  <label className="block text-xs font-semibold capitalize text-gray-500 mb-1">Zone</label>
+                  <select
+                    value={filters.zone}
+                    onChange={e => setFilters(prev => ({...prev, zone: e.target.value}))}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-black outline-none focus:border-yellow-400"
+                  >
+                     <option value="all">All Zones</option>
+                     {zoneOptions.map(zone => (
+                       <option key={zone} value={zone}>{zone}</option>
+                     ))}
                   </select>
                </div>
 

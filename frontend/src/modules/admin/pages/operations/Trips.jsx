@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Filter, MoreVertical, Search, Loader2, ChevronRight, Menu, X, Eye, UserPlus, MapPin, XCircle, FileText } from 'lucide-react';
+import { Filter, MoreVertical, Search, Loader2, ChevronRight, Menu, X, Eye, XCircle, FileText } from 'lucide-react';
 import { motion } from 'framer-motion';
+import toast from 'react-hot-toast';
 import { adminService } from '../../services/adminService';
 
 const STATUS_STYLES = {
@@ -45,6 +46,15 @@ const normalizeRow = (row = {}) => ({
   transportType: row.transportType || row.transport_type || row.service_type || row.module || '--',
   tripStatus: String(row.tripStatus || row.trip_status || row.status || '').toUpperCase(),
   paymentOption: String(row.paymentOption || row.payment_option || row.payment_method || 'CASH').toUpperCase(),
+  // The API has always sent these; the panel simply dropped them, so staff
+  // handling a complaint could not see where the trip went or ring anyone.
+  fare: Number(row.fare || 0),
+  pickupLabel: row.pickupLabel || row.pickupAddress || '',
+  dropLabel: row.dropLabel || row.dropAddress || '',
+  scheduledAt: row.scheduledAt || null,
+  bookingSource: row.bookingSource || '',
+  user: row.user || null,
+  driver: row.driver || null,
 });
 
 const TripDetailsModal = ({ trip, onClose }) => {
@@ -84,12 +94,79 @@ const TripDetailsModal = ({ trip, onClose }) => {
               <p className="text-[11px] uppercase tracking-wider font-bold text-gray-400 mb-1">Payment Option</p>
               <p className="text-[13px] font-bold text-gray-900 capitalize">{String(trip.paymentOption).toLowerCase()}</p>
             </div>
-            <div className="col-span-2 pt-2 border-t border-gray-50">
-              <p className="text-[11px] uppercase tracking-wider font-bold text-gray-400 mb-2">Trip Status</p>
+            <div>
+              <p className="text-[11px] uppercase tracking-wider font-bold text-gray-400 mb-1">Fare</p>
+              <p className="text-[13px] font-bold text-gray-900">₹{Number(trip.fare || 0).toFixed(2)}</p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase tracking-wider font-bold text-gray-400 mb-1">Trip Status</p>
               <span className={`inline-flex items-center px-2.5 py-1 text-xs font-bold rounded capitalize tracking-wide ${STATUS_STYLES[trip.tripStatus] || 'bg-gray-100 text-gray-600'}`}>
                 {String(trip.tripStatus).toLowerCase()}
               </span>
             </div>
+
+            {/* Where the trip went. Without this, a complaint call had nothing
+                to work from. */}
+            <div className="col-span-2 pt-3 border-t border-gray-100">
+              <p className="text-[11px] uppercase tracking-wider font-bold text-gray-400 mb-2">Route</p>
+              <div className="space-y-2.5">
+                <div className="flex gap-2.5">
+                  <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Pickup</p>
+                    <p className="text-[13px] font-semibold text-gray-900">{trip.pickupLabel || 'Not recorded'}</p>
+                  </div>
+                </div>
+                <div className="flex gap-2.5">
+                  <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-red-500" />
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Drop</p>
+                    <p className="text-[13px] font-semibold text-gray-900">{trip.dropLabel || 'Not recorded'}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Phone numbers, so staff can ring either side from this screen. */}
+            <div className="col-span-2 pt-3 border-t border-gray-100 grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-[11px] uppercase tracking-wider font-bold text-gray-400 mb-1">Customer</p>
+                <p className="text-[13px] font-bold text-gray-900">{trip.user?.name || trip.userName}</p>
+                <p className="text-[12px] font-semibold text-gray-600 select-all">
+                  {trip.user?.phone || 'No number on file'}
+                </p>
+              </div>
+              <div>
+                <p className="text-[11px] uppercase tracking-wider font-bold text-gray-400 mb-1">Driver</p>
+                <p className="text-[13px] font-bold text-gray-900">{trip.driver?.name || trip.driverName}</p>
+                <p className="text-[12px] font-semibold text-gray-600 select-all">
+                  {trip.driver?.phone || (trip.driver ? 'No number on file' : 'No driver assigned')}
+                </p>
+                {trip.driver?.vehicleNumber ? (
+                  <p className="text-[12px] font-semibold text-gray-500 mt-0.5">
+                    {trip.driver.vehicleNumber}
+                    {trip.driver.vehicleType ? ` · ${trip.driver.vehicleType}` : ''}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+
+            {(trip.scheduledAt || trip.bookingSource) ? (
+              <div className="col-span-2 pt-3 border-t border-gray-100 flex flex-wrap gap-x-8 gap-y-2">
+                {trip.scheduledAt ? (
+                  <div>
+                    <p className="text-[11px] uppercase tracking-wider font-bold text-gray-400 mb-1">Scheduled for</p>
+                    <p className="text-[13px] font-bold text-gray-900">{formatDate(trip.scheduledAt)}</p>
+                  </div>
+                ) : null}
+                {trip.bookingSource ? (
+                  <div>
+                    <p className="text-[11px] uppercase tracking-wider font-bold text-gray-400 mb-1">Booked from</p>
+                    <p className="text-[13px] font-bold text-gray-900 capitalize">{trip.bookingSource}</p>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </div>
         <div className="border-t border-gray-100 p-4 bg-gray-50 flex justify-end">
@@ -159,7 +236,7 @@ const handlePrintInvoice = (trip) => {
 };
 
 // Use Portal for dropdowns or handle within table row? Handling relative to table row.
-const ActionMenu = ({ row, onViewDetails, onPrintInvoice }) => {
+const ActionMenu = ({ row, onViewDetails, onPrintInvoice, onCancelTrip }) => {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef(null);
 
@@ -175,8 +252,6 @@ const ActionMenu = ({ row, onViewDetails, onPrintInvoice }) => {
 
   const isCompleted = row.tripStatus === 'COMPLETED';
   const isCancelled = row.tripStatus === 'CANCELLED';
-  const isOngoing = row.tripStatus === 'ONGOING' || row.tripStatus === 'ACCEPTED';
-  const hasDriver = row.driverName !== '--';
 
   return (
     <div className="relative" ref={menuRef}>
@@ -195,19 +270,8 @@ const ActionMenu = ({ row, onViewDetails, onPrintInvoice }) => {
           >
             <Eye size={14} /> View Details
           </button>
-          <button 
-            disabled={isCompleted || isCancelled || isOngoing || hasDriver}
-            className="w-full text-left px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-yellow-50 hover:text-yellow-900 flex items-center gap-2 disabled:opacity-40 disabled:hover:bg-white disabled:hover:text-gray-700"
-          >
-            <UserPlus size={14} /> Assign Driver
-          </button>
-          <button 
-            disabled={!isOngoing}
-            className="w-full text-left px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-yellow-50 hover:text-yellow-900 flex items-center gap-2 disabled:opacity-40 disabled:hover:bg-white disabled:hover:text-gray-700"
-          >
-            <MapPin size={14} /> Track Trip
-          </button>
-          <button 
+          <button
+            onClick={() => { setIsOpen(false); onCancelTrip(); }}
             disabled={isCompleted || isCancelled}
             className="w-full text-left px-4 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 flex items-center gap-2 disabled:opacity-40 disabled:hover:bg-white"
           >
@@ -240,6 +304,26 @@ const Trips = () => {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  // Cancels the trip for real: the same call the Ongoing Requests screen makes,
+  // which stops the dispatch loop, marks the ride cancelled and tells both apps.
+  // Until this was wired up the menu item did nothing at all, so staff could tell
+  // a customer their ride was cancelled while the driver was still on the way.
+  const handleCancelTrip = async (row) => {
+    const confirmed = window.confirm(
+      `Cancel trip ${row.requestId}?\n\nThe rider and the driver are both told immediately, and the driver is freed for other trips. This cannot be undone, and it does not refund the customer.`
+    );
+    if (!confirmed) return;
+    try {
+      await adminService.deleteOngoingRide(row.id);
+      toast.success(`Trip ${row.requestId} cancelled`);
+      setRows((prev) => prev.map((item) => (
+        item.id === row.id ? { ...item, tripStatus: 'CANCELLED' } : item
+      )));
+    } catch (err) {
+      toast.error(err?.message || 'Could not cancel the trip. Nothing was changed.');
+    }
+  };
 
   // Filter State
   const [showFilters, setShowFilters] = useState(false);
@@ -555,10 +639,11 @@ const Trips = () => {
                         </span>
                       </td>
                       <td className="px-4 py-2 text-right">
-                        <ActionMenu 
-                          row={row} 
-                          onViewDetails={() => setSelectedTrip(row)} 
+                        <ActionMenu
+                          row={row}
+                          onViewDetails={() => setSelectedTrip(row)}
                           onPrintInvoice={() => handlePrintInvoice(row)}
+                          onCancelTrip={() => handleCancelTrip(row)}
                         />
                       </td>
                     </tr>

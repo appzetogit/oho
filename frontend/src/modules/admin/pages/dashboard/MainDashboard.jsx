@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import toast from 'react-hot-toast';
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -255,7 +254,7 @@ const MainDashboard = () => {
         </div>
 
         {/* REVENUE & BOOKING ANALYTICS ROW */}
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           
           {/* 2. Interactive Revenue Analytics */}
           <div className="admin-card lg:col-span-2 flex flex-col justify-between hover:shadow-md transition-shadow">
@@ -411,72 +410,11 @@ const MainDashboard = () => {
               </>
             )}
           </div>
-
-          {/* 16. Platform Health Diagnostics */}
-          <div className="admin-card flex flex-col justify-between hover:shadow-md transition-shadow">
-            <div>
-              <h3 className="text-xs text-[#0B1220] uppercase tracking-wider mb-1 font-bold">Platform Diagnostic Health</h3>
-              <p className="text-[11px] text-[#64748B] mb-3">Real-time gateway status checks.</p>
-            </div>
-
-            <div className="space-y-2 text-[10px] text-slate-600">
-              {[
-                { name: "Application Node API", icon: Server, status: "Active", color: "text-emerald-500" },
-                { name: "Database Cluster", icon: Database, status: "Operational", color: "text-emerald-500" },
-                { name: "Socket Connection", icon: Activity, status: "Connected", color: "text-emerald-500" },
-                { name: "Redis Memory Cache", icon: Cpu, status: "Healthy", color: "text-emerald-500" },
-                { name: "Google Map Services", icon: Map, status: "Operational", color: "text-emerald-500" }
-              ].map((item, idx) => (
-                <div key={idx} className="flex items-center justify-between border-b border-[#F1F5F9] pb-1.5">
-                  <span className="flex items-center gap-1.5">
-                    <item.icon size={11} className="text-[#64748B]" />
-                    <span>{item.name}</span>
-                  </span>
-                  <span className={`font-bold ${item.color}`}>{item.status}</span>
-                </div>
-              ))}
-            </div>
-
-            <div className="bg-[#F8FAFC] border border-[#E5E7EB] rounded-lg p-2 text-center text-[9px] text-[#64748B] mt-2.5">
-              🚀 All system channels operating under normal latency limits.
-            </div>
-          </div>
         </div>
 
-        {/* SECONDARY ROW (Leaderboards, Activity Feed, MAP, SOS) */}
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        {/* SECONDARY ROW (SOS) */}
+        <div className="grid grid-cols-1 gap-6">
           
-          {/* Driver & Vendor Performance Leaderboard */}
-          <div className="admin-card flex flex-col justify-between hover:shadow-md transition-shadow">
-            <div>
-              <h3 className="text-xs text-[#0B1220] uppercase tracking-wider mb-3 flex items-center gap-1 font-bold">
-                <Award size={14} className="text-[#FFC400]" />
-                <span>Performance Leaderboard</span>
-              </h3>
-              
-              <div className="space-y-3.5">
-                {[
-                  { name: "Rydon Driver Node A", rating: "4.95", trips: 48, status: "Active", color: "bg-emerald-500" },
-                  { name: "City Fleet Partner B", rating: "4.89", trips: 42, status: "Active", color: "bg-emerald-500" },
-                  { name: "Rydon Courier Node C", rating: "4.82", trips: 36, status: "Active", color: "bg-emerald-500" },
-                  { name: "Partner Fleet Partner D", rating: "4.75", trips: 31, status: "Active", color: "bg-[#FFC400]" }
-                ].map((lead, i) => (
-                  <div key={i} className="flex items-center justify-between text-xs pb-2 border-b border-[#F1F5F9] last:border-0 last:pb-0">
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-full bg-slate-50 flex items-center justify-center font-bold text-[10px] text-[#0B1220] border">
-                        {i + 1}
-                      </div>
-                      <div>
-                        <span className="font-semibold block text-[#0B1220]">{lead.name}</span>
-                        <span className="text-[9px] text-slate-400 block mt-0.5">Rating: {lead.rating} ⭐</span>
-                      </div>
-                    </div>
-                    <span className="font-bold text-[#0B1220]">{lead.trips} trips</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
 
           {/* SOS Safety Monitoring & Uptime */}
           <div className="admin-card flex flex-col justify-between hover:shadow-md transition-shadow relative overflow-hidden">
@@ -523,37 +461,6 @@ const MainDashboard = () => {
             >
               <AlertTriangle size={13} />
               <span>Enter Emergency Terminal</span>
-            </button>
-          </div>
-
-          {/* AI Insights & Anomalies Panel */}
-          <div className="admin-card flex flex-col justify-between hover:shadow-md transition-shadow bg-slate-900 !text-white border-0">
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-xs !text-white uppercase tracking-wider flex items-center gap-1.5 font-bold">
-                  <Sparkles size={14} className="text-[#FFC400]" />
-                  <span>AI Operations Insights</span>
-                </h3>
-                <span className="text-[8px] bg-slate-800 text-slate-300 font-bold px-1.5 py-0.5 rounded border border-slate-700">
-                  Model v4
-                </span>
-              </div>
-
-              <div className="space-y-3 text-xs leading-relaxed text-slate-300">
-                <p>
-                  📈 <strong>Demand Surge Identified:</strong> High session traffic recorded near core metro terminals. Recommend increasing driver incentives to support utilization.
-                </p>
-                <p>
-                  🔒 <strong>Security Posture:</strong> Platform authentication score stands at 92%. Active MFA validation verified across all Sub-admin tokens.
-                </p>
-              </div>
-            </div>
-
-            <button
-              onClick={() => toast.success('Dispatching operational targets to city hubs.')}
-              className="w-full py-2.5 rounded-lg bg-slate-800 hover:bg-slate-750 !text-white text-[10px] font-bold uppercase tracking-wider transition-all mt-4 border border-slate-700"
-            >
-              Dispatch System Recommendations
             </button>
           </div>
         </div>

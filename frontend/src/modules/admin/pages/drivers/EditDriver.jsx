@@ -112,9 +112,8 @@ const EditDriver = () => {
 
   const [error, setError] = useState('');
 
-  const providedToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5YzdiZTZhYmJlOTJlYjYwMGYwMmQxNiIsImVtYWlsIjoiYWRtaW5AYWRtaW4uY29tIiwibW9iaWxlIjoiOTk5OTk5OTk5OSIsInJvbGUiOiJzdXBlci1hZG1pbiIsImlhdCI6MTc3NTA0OTExNywiZXhwIjoxODA2NTg1MTE3fQ.5KJmXJwaVefWhnc97EqtArkA1z7ZOhsJwA9fbyRVPdQ';
   const storedToken = localStorage.getItem('adminToken');
-  const token = (storedToken && storedToken !== 'undefined' && storedToken !== 'null') ? storedToken : providedToken;
+  const token = (storedToken && storedToken !== 'undefined' && storedToken !== 'null') ? storedToken : '';
 
   useEffect(() => {
     const fetchInitialData = async () => {

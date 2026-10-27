@@ -15,6 +15,35 @@ import { Link, useNavigate } from 'react-router-dom';
 import { adminService } from '../../services/adminService';
 import toast from 'react-hot-toast';
 
+// A labelled on/off control for the three billing modes above the list. It was
+// used here but never defined, which crashed the whole screen on load.
+const ToggleSwitch = ({ label, enabled, onToggle }) => (
+  <button
+    type="button"
+    role="switch"
+    aria-checked={enabled}
+    onClick={onToggle}
+    className={`flex items-center gap-3 px-4 py-2.5 rounded-lg border text-sm font-medium transition-colors ${
+      enabled
+        ? 'bg-amber-50 border-amber-300 text-gray-900'
+        : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+    }`}
+  >
+    <span
+      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+        enabled ? 'bg-amber-400' : 'bg-gray-300'
+      }`}
+    >
+      <span
+        className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+          enabled ? 'translate-x-4' : 'translate-x-0.5'
+        }`}
+      />
+    </span>
+    <span>{label}</span>
+  </button>
+);
+
 const DriverSubscriptions = () => {
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState('');
