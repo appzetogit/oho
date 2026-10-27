@@ -3,6 +3,7 @@ import { AlertTriangle, Download, FileSpreadsheet, Loader2, X } from 'lucide-rea
 import * as XLSX from 'xlsx';
 import toast from 'react-hot-toast';
 import { adminService } from '../../services/adminService';
+import DateRangePicker from '../../components/DateRangePicker';
 
 /**
  * Export driver withdrawal requests as a spreadsheet for a bank bulk payout
@@ -173,7 +174,7 @@ const WithdrawalExportModal = ({ onClose }) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg overflow-hidden rounded-xl bg-white shadow-2xl">
+      <div className="w-full max-w-lg rounded-xl bg-white shadow-2xl">
         <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
           <div className="flex items-center gap-2">
             <FileSpreadsheet size={20} className="text-emerald-600" />
@@ -195,17 +196,14 @@ const WithdrawalExportModal = ({ onClose }) => {
               {STATUS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label htmlFor="payout-export-from" className="mb-1 block text-xs font-semibold text-gray-600">Requested from</label>
-              <input id="payout-export-from" type="date" value={from} onChange={(e) => { setFrom(e.target.value); setData(null); }}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-yellow-400" />
-            </div>
-            <div>
-              <label htmlFor="payout-export-to" className="mb-1 block text-xs font-semibold text-gray-600">Requested to</label>
-              <input id="payout-export-to" type="date" value={to} onChange={(e) => { setTo(e.target.value); setData(null); }}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-yellow-400" />
-            </div>
+          <div>
+            <label htmlFor="payout-export-dates" className="mb-1 block text-xs font-semibold text-gray-600">Requested between</label>
+            <DateRangePicker
+              id="payout-export-dates"
+              from={from}
+              to={to}
+              onChange={(range) => { setFrom(range.from); setTo(range.to); setData(null); }}
+            />
           </div>
           <div>
             <label htmlFor="payout-export-mode" className="mb-1 block text-xs font-semibold text-gray-600">Payment mode</label>
