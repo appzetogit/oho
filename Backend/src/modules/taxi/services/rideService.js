@@ -9,7 +9,7 @@ import { Vehicle } from '../admin/models/Vehicle.js';
 import { Driver } from '../driver/models/Driver.js';
 import { WalletTransaction } from '../driver/models/WalletTransaction.js';
 import { incrementDriverTodaySummaryForCompletedRide } from '../driver/services/driverTodaySummaryService.js';
-import { payRideIncentive } from '../rideIncentives/services/incentiveService.js';
+import { payRideIncentive, promiseRideIncentive } from '../rideIncentives/services/incentiveService.js';
 import { applyDriverWalletAdjustment, ensureDriverWalletCanAcceptRide, settleCompletedRideWallet } from '../driver/services/walletService.js';
 import { sendRideInvoiceEmail } from './invoiceService.js';
 import { Delivery } from '../user/models/Delivery.js';
@@ -1685,6 +1685,12 @@ export const acceptRideAssignment = async ({ rideId, driverId }) => {
   }
 
   await syncDeliveryWithRide(acceptedRide);
+
+  // Must never stop the driver getting the ride. Without a promise the ride is
+  // simply judged by the rules when it completes.
+  await promiseRideIncentive(acceptedRide, claimedDriver._id).catch((error) => {
+    console.error('[ride-incentive] could not record promise for ride', String(acceptedRide._id), error);
+  });
 
   return acceptedRide;
 };

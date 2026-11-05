@@ -520,6 +520,13 @@ const rideSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    // What the driver was shown when they accepted. Paid as promised, even if
+    // the admin changes the settings before the ride ends.
+    promisedIncentive: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     walletSettledAt: {
       type: Date,
       default: null,

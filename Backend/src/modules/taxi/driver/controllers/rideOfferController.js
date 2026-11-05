@@ -8,6 +8,7 @@ import {
   notifyRideAccepted,
 } from '../../services/dispatchService.js';
 import { acceptRideAssignment, getRideRoom } from '../../services/rideService.js';
+import { estimateRideIncentives } from '../../rideIncentives/services/incentiveService.js';
 
 /**
  * Offers this driver was dispatched but has not answered yet.
@@ -45,8 +46,16 @@ export const getPendingRideOffers = asyncHandler(async (req, res) => {
     .populate('userId', 'name phone countryCode')
     .lean();
 
-  const offers = rides
-    .filter((ride) => !asIdSet(ride?.dispatchTracking?.rejectedDriverIds).has(driverId))
+  const liveRides = rides
+    .filter((ride) => !asIdSet(ride?.dispatchTracking?.rejectedDriverIds).has(driverId));
+
+  // A problem here must never lose the offer itself.
+  const incentives = new Map(await Promise.all(liveRides.map(async (ride) => {
+    const amounts = await estimateRideIncentives(ride, [driverId]).catch(() => new Map());
+    return [String(ride._id), amounts.get(driverId) || 0];
+  })));
+
+  const offers = liveRides
     .map((ride) => {
       const rider = ride.userId && typeof ride.userId === 'object' ? ride.userId : {};
       const lastDispatchAt = ride?.dispatchTracking?.lastDispatchAttemptAt
@@ -88,6 +97,7 @@ export const getPendingRideOffers = asyncHandler(async (req, res) => {
         vehicleIconType: ride.vehicleIconType || '',
         vehicleIconUrl: ride.vehicleIconUrl || '',
         fare: ride.fare,
+        companyIncentive: incentives.get(String(ride._id)) || 0,
         baseFare: Number(ride.baseFare || ride.fare || 0),
         bookingMode: ride.bookingMode || 'normal',
         pricingNegotiationMode: ride.pricingNegotiationMode || 'none',

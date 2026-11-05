@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { ApiError } from '../../../../utils/ApiError.js';
 import { Vehicle } from '../../admin/models/Vehicle.js';
 import { Driver } from '../../driver/models/Driver.js';
@@ -76,22 +77,70 @@ export const updateIncentiveSettings = async (payload = {}, adminId = '') => {
 };
 
 /**
+ * What each of these drivers would earn on this ride, for showing on the offer.
+ * Uses the same rules as the payment. Returns driverId -> amount, leaving out
+ * drivers who would get nothing, and nothing at all while it's switched off.
+ */
+export const estimateRideIncentives = async (ride, driverIds = []) => {
+  const amounts = new Map();
+  const settings = await getSettings();
+  if (!settings.enabled || driverIds.length === 0) return amounts;
+
+  const [drivers, paidRows] = await Promise.all([
+    Driver.find({ _id: { $in: driverIds } }).select('phone approve status deletedAt').lean(),
+    RideIncentivePayout.aggregate([
+      {
+        $match: {
+          driverId: { $in: driverIds.map((id) => new mongoose.Types.ObjectId(String(id))) },
+          day: toIstDayKey(),
+          status: { $in: ['pending', 'paid'] },
+        },
+      },
+      { $group: { _id: '$driverId', count: { $sum: 1 } } },
+    ]),
+  ]);
+
+  const paidToday = new Map(paidRows.map((row) => [String(row._id), row.count]));
+  const rules = normalizeIncentiveSettings(settings);
+  for (const driver of drivers) {
+    const decision = decideIncentive({
+      settings: rules,
+      ride,
+      driver,
+      paidToday: paidToday.get(String(driver._id)) || 0,
+    });
+    if (decision.pay) amounts.set(String(driver._id), decision.amount);
+  }
+  return amounts;
+};
+
+/** Records what the driver who accepted was promised, so they get what they saw. */
+export const promiseRideIncentive = async (ride, driverId) => {
+  const amounts = await estimateRideIncentives(ride, [driverId]);
+  const promised = amounts.get(String(driverId)) || 0;
+  await Ride.updateOne({ _id: ride._id }, { $set: { promisedIncentive: promised } });
+  return promised;
+};
+
+/**
  * Decides and, if earned, pays the top-up for one completed ride. Safe to call
  * any number of times. Returns the amount paid by this call, or 0.
  */
 export const payRideIncentive = async (rideId) => {
   const settings = await getSettings();
-  if (!settings.enabled) return 0;
+  const ride = await Ride.findById(rideId)
+    .select('status driverId fare vehicleTypeId serviceType estimatedDistanceMeters completedAt walletSettledAt promisedIncentive')
+    .lean();
+  const promised = Number(ride?.promisedIncentive || 0);
+  if (!settings.enabled && promised <= 0) return 0;
 
   await ensureIndexes();
   if (await RideIncentivePayout.exists({ rideId })) return 0;
 
-  const ride = await Ride.findById(rideId)
-    .select('status driverId fare vehicleTypeId serviceType estimatedDistanceMeters completedAt walletSettledAt')
-    .lean();
   if (!ride?.driverId || ride.status !== 'completed' || !ride.completedAt) return 0;
-  // A ride from before it was switched on never earns, however it got here.
-  if (!settings.startsAt || new Date(ride.completedAt) < new Date(settings.startsAt)) return 0;
+  // A ride from before it was switched on never earns, however it got here,
+  // unless the driver accepted it on a promise.
+  if (promised <= 0 && (!settings.startsAt || new Date(ride.completedAt) < new Date(settings.startsAt))) return 0;
 
   const driver = await Driver.findById(ride.driverId).select('phone approve status deletedAt').lean();
   const day = toIstDayKey(ride.completedAt);
@@ -100,12 +149,14 @@ export const payRideIncentive = async (rideId) => {
     day,
     status: { $in: ['pending', 'paid'] },
   });
-  const decision = decideIncentive({
-    settings: normalizeIncentiveSettings(settings),
-    ride,
-    driver,
-    paidToday,
-  });
+  const decision = promised > 0
+    ? { pay: true, amount: promised, reason: '' }
+    : decideIncentive({
+      settings: normalizeIncentiveSettings(settings),
+      ride,
+      driver,
+      paidToday,
+    });
 
   let row;
   try {
@@ -165,14 +216,16 @@ export const payRideIncentive = async (rideId) => {
 export const runIncentiveSweep = async (now = new Date()) => {
   await ensureIndexes();
   const settings = await getSettings();
-  if (!settings.enabled || !settings.startsAt) return 0;
+  const isOn = Boolean(settings.enabled && settings.startsAt);
 
-  const since = new Date(Math.max(new Date(settings.startsAt).getTime(), now.getTime() - SWEEP_LOOKBACK_MS));
+  // With it off, only rides a driver accepted on a promise are still owed.
+  const lookback = new Date(now.getTime() - SWEEP_LOOKBACK_MS);
   const rides = await Ride.find({
     status: 'completed',
-    completedAt: { $gte: since },
     driverId: { $ne: null },
     walletSettledAt: { $ne: null },
+    completedAt: { $gte: isOn ? new Date(Math.max(new Date(settings.startsAt).getTime(), lookback.getTime())) : lookback },
+    ...(isOn ? {} : { promisedIncentive: { $gt: 0 } }),
   }).select('_id').limit(1000).lean();
   if (rides.length === 0) return 0;
 
