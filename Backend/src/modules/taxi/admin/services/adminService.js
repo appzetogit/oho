@@ -2764,6 +2764,8 @@ const DRIVER_LIST_SELECT = [
   'rating',
   'ratingCount',
   'isOnline',
+  // isDriverPresent needs this: without it every driver reads as offline.
+  'lastSeenAt',
   'isOnRide',
   'onlineSelfie',
   'location',

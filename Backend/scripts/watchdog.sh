@@ -67,6 +67,31 @@ if [ -f "$PAUSE_FILE" ]; then
   exit 0
 fi
 
+# --- SSL certificate ----------------------------------------------------
+# Once a day, warn before ohoride.in's certificate runs out. It lapsed on
+# 29 Oct 2026 because renewal silently failed. Only ever logs: it changes
+# nothing and doesn't use up the action budget.
+CERT_HOST=${OHO_WATCHDOG_CERT_HOST:-ohoride.in}
+CERT_WARN_DAYS=${OHO_WATCHDOG_CERT_WARN_DAYS:-14}
+CERT_CHECKED=$STATE_DIR/cert_checked
+today=$(date +%F)
+if [ "$(cat "$CERT_CHECKED" 2>/dev/null)" != "$today" ]; then
+  echo "$today" > "$CERT_CHECKED"
+  cert_end=$(echo | timeout 20 openssl s_client -connect "$CERT_HOST:443" -servername "$CERT_HOST" 2>/dev/null \
+    | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
+  cert_end_ts=$(date -d "$cert_end" +%s 2>/dev/null)
+  if [ -z "$cert_end" ] || [ -z "$cert_end_ts" ]; then
+    log "CERTIFICATE: could not read the certificate for $CERT_HOST — check it by hand"
+  else
+    cert_days=$(( (cert_end_ts - $(date +%s)) / 86400 ))
+    if [ "$cert_days" -lt "$CERT_WARN_DAYS" ]; then
+      log "NEEDS A HUMAN: CERTIFICATE for $CERT_HOST expires in $cert_days days ($cert_end) — renew it in CloudPanel: Sites > ohoride.in > SSL/TLS"
+    else
+      log "certificate for $CERT_HOST OK, $cert_days days left"
+    fi
+  fi
+fi
+
 # --- action budget ------------------------------------------------------
 ACTIONS=$STATE_DIR/actions   # one unix timestamp per action taken
 now=$(date +%s)
