@@ -24,6 +24,7 @@ import {
   listMyBusBookings,
   getUserWallet,
   getCurrentUser,
+  getMyReferrals,
   getUserNotifications,
   deleteUserNotification,
   endMyActiveRentalRide,
@@ -107,6 +108,7 @@ userRouter.post('/fcm-token', authenticate(['user']), asyncHandler(saveUserFcmTo
 // Public: booking enquiry from the marketing site. Rate limited because it
 // is unauthenticated and writes a record.
 userRouter.post('/booking-request', loginRateLimit, asyncHandler(submitWebsiteBooking));
+userRouter.get('/referrals', authenticate(['user']), asyncHandler(getMyReferrals));
 userRouter.get('/me', authenticate(['user']), asyncHandler(getCurrentUser));
 userRouter.patch('/me', authenticate(['user']), asyncHandler(updateCurrentUser));
 userRouter.get('/subscriptions/plans', authenticate(['user']), asyncHandler(getAvailableSubscriptionPlans));

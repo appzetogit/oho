@@ -321,7 +321,7 @@ const DriverReferralSettings = () => {
 
                 {isConditional && (
                   <div className="bg-gray-50/50 rounded-xl border border-gray-200 p-6 space-y-3">
-                    <label className={labelClass}>Required Ride Count</label>
+                    <label className={labelClass}>Target Referral Ride Count</label>
                     <input
                       type="number"
                       value={settings.ride_count}
@@ -329,7 +329,7 @@ const DriverReferralSettings = () => {
                       className={inputClass}
                       placeholder="5"
                     />
-                    <p className="text-[11px] text-gray-400 font-medium">Number of rides required before referral rewards unlock.</p>
+                    <p className="text-[11px] text-gray-400 font-medium">Rides the referred driver must complete before the referrer receives the referral amount.</p>
                   </div>
                 )}
 

@@ -16,6 +16,12 @@ export const adminService = {
   getRiderCoinTransactions: (userId) => api.get(`/admin/coins/riders/${userId}/transactions`),
   adjustRiderCoins: (userId, data) => api.post(`/admin/coins/riders/${userId}/adjust`, data),
 
+  /**
+   * App versions and store links (force update, update prompt, referral share links)
+   */
+  getAppVersions: () => api.get('/admin/app-version'),
+  updateAppVersion: (app, data) => api.patch(`/admin/app-version/${app}`, data),
+
   forgotPassword: (email) => api.post('/admin/forgot-password', { email }),
   verifyResetOtp: (data) => api.post('/admin/verify-reset-otp', data),
   resetPassword: (data) => api.post('/admin/reset-password', data),

@@ -307,6 +307,21 @@ const processDriverSignupReferralRewards = async ({ driver, referrer }) => {
   }
 };
 
+/**
+ * Pays an "instant" driver referral reward once the referred driver is
+ * approved. Safe to call on every approval save: each credit is keyed per
+ * driver, so it is paid once. Conditional types are untouched; they pay on
+ * ride completion.
+ */
+export const grantDriverInstantReferralReward = async (driverId) => {
+  const driver = await Driver.findById(driverId);
+  if (!driver?.referredBy || driver.approve !== true) {
+    return;
+  }
+  const referrer = await Driver.findById(driver.referredBy).select('_id phone');
+  await processDriverSignupReferralRewards({ driver, referrer });
+};
+
 const matchesDocumentRole = (accountType, role) => {
   const normalizedAccountType = String(accountType || 'individual').trim().toLowerCase();
   const normalizedRole = normalizeRole(role);
@@ -1754,9 +1769,11 @@ export const completeDriverOnboarding = async ({ registrationId, phone, document
     await driver.save();
   }
 
+  // Only counted here. An instant referral reward is paid when an admin
+  // approves this driver (grantDriverInstantReferralReward), not at sign-up,
+  // so a driver who is never approved never earns anyone a reward.
   if (referrer?._id) {
     await Driver.updateOne({ _id: referrer._id }, { $inc: { referralCount: 1 } });
-    await processDriverSignupReferralRewards({ driver, referrer });
   }
 
   session.finalDriverId = driver._id;

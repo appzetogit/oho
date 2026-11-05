@@ -4,6 +4,8 @@ import { Env, StandardCheckoutClient, StandardCheckoutPayRequest, PrefillUserLog
 import { ApiError } from '../../../../utils/ApiError.js';
 import { asyncHandler } from '../../../../utils/asyncHandler.js';
 import { User } from '../models/User.js';
+import { Ride } from '../models/Ride.js';
+import { RIDE_STATUS } from '../../constants/index.js';
 import { createWebsiteBookingRequest } from '../services/websiteBookingService.js';
 import { UserWallet } from '../models/UserWallet.js';
 import { AdminBusinessSetting } from '../../admin/models/AdminBusinessSetting.js';
@@ -1552,7 +1554,35 @@ const findUserByReferralCode = async (referralCode) => {
     return null;
   }
 
-  return User.findOne({ referralCode: normalizedCode });
+  return User.findOne({ referralCode: normalizedCode, deletedAt: null });
+};
+
+/**
+ * Checks a referral code at signup, including signups that restore a deleted
+ * account with the same phone (which keeps that account's old code):
+ *   - the rider cannot be their own referrer
+ *   - an account that was already referred keeps its original referrer, so
+ *     signing up again neither re-counts nor re-pays anyone
+ * Returns the referrer to credit now, or null.
+ */
+const resolveSignupReferrer = async ({ referralCode, phone, existingUser }) => {
+  if (!referralCode) return null;
+  const referrer = await findUserByReferralCode(referralCode);
+  if (!referrer) {
+    // A restored account's own old code is not found (it is still marked
+    // deleted), but it deserves the clearer message.
+    if (existingUser && normalizeReferralCode(existingUser.referralCode) === normalizeReferralCode(referralCode)) {
+      throw new ApiError(400, 'You cannot use your own referral code');
+    }
+    throw new ApiError(400, 'Invalid referral code');
+  }
+  if (String(referrer.phone || '') === String(phone || '') || (existingUser && String(referrer._id) === String(existingUser._id))) {
+    throw new ApiError(400, 'You cannot use your own referral code');
+  }
+  if (existingUser?.referredBy) {
+    return null;
+  }
+  return referrer;
 };
 
 const creditUserWalletByReference = async ({ userId, amount, title, referenceKey }) => {
@@ -1650,12 +1680,8 @@ export const registerUser = async (req, res) => {
 
   const existingUser = await User.findOne({ phone });
 
-  const referrer = referralCode ? await findUserByReferralCode(referralCode) : null;
+  const referrer = await resolveSignupReferrer({ referralCode, phone, existingUser });
   const employee = employeeCode ? await findActiveEmployeeByCode(employeeCode) : null;
-
-  if (referralCode && !referrer) {
-    throw new ApiError(400, 'Invalid referral code');
-  }
 
   if (employeeCode && !employee) {
     throw new ApiError(400, 'Invalid employee code');
@@ -1677,6 +1703,9 @@ export const registerUser = async (req, res) => {
     referrer,
     employee,
   });
+  if (existingUser?.referredBy) {
+    userPayload.referredBy = existingUser.referredBy;
+  }
 
   const user = existingUser
     ? await User.findByIdAndUpdate(existingUser._id, { $set: userPayload }, { new: true, runValidators: true })
@@ -1772,12 +1801,8 @@ export const signupUser = async (req, res) => {
 
   const existingUser = await User.findOne({ phone });
 
-  const referrer = referralCode ? await findUserByReferralCode(referralCode) : null;
+  const referrer = await resolveSignupReferrer({ referralCode, phone, existingUser });
   const employee = employeeCode ? await findActiveEmployeeByCode(employeeCode) : null;
-
-  if (referralCode && !referrer) {
-    throw new ApiError(400, 'Invalid referral code');
-  }
 
   if (employeeCode && !employee) {
     throw new ApiError(400, 'Invalid employee code');
@@ -1799,6 +1824,9 @@ export const signupUser = async (req, res) => {
     referrer,
     employee,
   });
+  if (existingUser?.referredBy) {
+    userPayload.referredBy = existingUser.referredBy;
+  }
 
   const user = existingUser
     ? await User.findByIdAndUpdate(existingUser._id, { $set: userPayload }, { new: true, runValidators: true })
@@ -1906,6 +1934,77 @@ export const saveUserFcmToken = async (req, res) => {
       message: 'FCM token saved successfully',
       platform: saved.platform,
       field: saved.fieldName,
+    },
+  });
+};
+
+// The rides that count towards a rider's referral target; must match the
+// payout in rideService.processCompletedRideReferralReward.
+const REFERRAL_RIDE_SERVICE_TYPES = ['ride', 'intercity'];
+
+export const getMyReferrals = async (req, res) => {
+  const user = await User.findById(req.auth.sub).select('referralCode referralCount referredBy referralRewardGrantedAt').lean();
+  if (!user) {
+    throw new ApiError(404, 'User not found');
+  }
+
+  const settingsDoc = await AdminBusinessSetting.findOne({ scope: 'default' }).select('referral').lean();
+  const userSettings = settingsDoc?.referral?.user || {};
+  const type = String(userSettings.type || 'instant_referrer').trim().toLowerCase();
+  const isConditional = ['conditional_referrer', 'conditional_referrer_new'].includes(type);
+  const targetRideCount = isConditional ? Math.max(1, Number(userSettings.ride_count || 0) || 1) : 0;
+
+  const referred = await User.find({ referredBy: req.auth.sub })
+    .select('name phone createdAt referralRewardGrantedAt')
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const completed = new Map();
+  if (referred.length > 0) {
+    const rows = await Ride.aggregate([
+      { $match: { userId: { $in: referred.map((item) => item._id) }, status: RIDE_STATUS.COMPLETED, serviceType: { $in: REFERRAL_RIDE_SERVICE_TYPES } } },
+      { $group: { _id: '$userId', count: { $sum: 1 } } },
+    ]);
+    rows.forEach((row) => completed.set(String(row._id), row.count));
+  }
+
+  const maskPhone = (value = '') => {
+    const digits = String(value || '');
+    return digits.length > 4 ? `${'*'.repeat(digits.length - 4)}${digits.slice(-4)}` : digits;
+  };
+
+  let myReferral = null;
+  if (user.referredBy) {
+    const referrer = await User.findById(user.referredBy).select('name phone').lean();
+    const myCompletedRides = await Ride.countDocuments({ userId: req.auth.sub, status: RIDE_STATUS.COMPLETED, serviceType: { $in: REFERRAL_RIDE_SERVICE_TYPES } });
+    myReferral = {
+      referrerName: referrer?.name || 'Friend',
+      referrerPhone: maskPhone(referrer?.phone),
+      completedRides: myCompletedRides,
+      targetRideCount,
+      rewardGranted: Boolean(user.referralRewardGrantedAt),
+    };
+  }
+
+  res.json({
+    success: true,
+    data: {
+      myReferral,
+      referralCode: user.referralCode || '',
+      enabled: Boolean(userSettings.enabled),
+      type,
+      rewardAmount: Math.max(0, Number(userSettings.amount || 0) || 0),
+      targetRideCount,
+      totalReferred: referred.length,
+      referrals: referred.map((item) => ({
+        id: String(item._id),
+        name: item.name || 'Friend',
+        phone: maskPhone(item.phone),
+        joinedAt: item.createdAt || null,
+        completedRides: completed.get(String(item._id)) || 0,
+        targetRideCount,
+        rewardEarned: Boolean(item.referralRewardGrantedAt),
+      })),
     },
   });
 };

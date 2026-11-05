@@ -52,6 +52,7 @@ import {
   getDriverVehicleFieldTemplates,
   getDriverEmergencyContacts,
   getDriverIncentives,
+  getDriverReferrals,
   getDriverNotifications,
   cancelDriverScheduledRide,
   getDriverScheduledRides,
@@ -328,6 +329,11 @@ driverRouter.get(
   "/wallet",
   authenticate(["driver"]),
   asyncHandler(getMyWallet),
+);
+driverRouter.get(
+  "/referrals",
+  authenticate(["driver"]),
+  asyncHandler(getDriverReferrals),
 );
 driverRouter.get(
   "/incentives",

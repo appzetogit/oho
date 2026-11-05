@@ -5452,6 +5452,11 @@ export const updateDriver = async (id, payload, currentAdmin = null) => {
   if (update.approve === true) {
     await grantDriverJoiningBonus({ driverId: driver._id, grantedBy: currentAdmin?._id || null })
       .catch((error) => console.error('Driver joining bonus failed', driver._id, error.message));
+    // Loaded here rather than imported at the top: onboardingService already
+    // imports this module.
+    await import('../../driver/services/onboardingService.js')
+      .then(({ grantDriverInstantReferralReward }) => grantDriverInstantReferralReward(driver._id))
+      .catch((error) => console.error('Driver referral reward failed', driver._id, error.message));
   }
 
   return serializeDriver(driver);
@@ -5690,27 +5695,71 @@ export const updateReferralSettings = async (type, payload) => {
 };
 
 export const getReferralDashboard = async () => {
-  const [totalDrivers, totalUsers] = await Promise.all([
+  const yearStart = new Date(new Date().getFullYear(), 0, 1);
+  const referredFilter = { referredBy: { $ne: null } };
+  const pendingFilter = { referredBy: { $ne: null }, referralRewardGrantedAt: null };
+
+  const monthly = async (Model) => {
+    const rows = await Model.aggregate([
+      { $match: { ...referredFilter, createdAt: { $gte: yearStart } } },
+      { $group: { _id: { $month: '$createdAt' }, count: { $sum: 1 } } },
+    ]);
+    const months = Array(12).fill(0);
+    rows.forEach((row) => { months[row._id - 1] = row.count; });
+    return months;
+  };
+
+  const [
+    totalDrivers,
+    totalUsers,
+    referredUsers,
+    referredDrivers,
+    pendingUsers,
+    pendingDrivers,
+    driverEarning,
+    userEarning,
+    userMonthly,
+    driverMonthly,
+  ] = await Promise.all([
     Driver.countDocuments(),
     User.countDocuments(),
+    User.countDocuments(referredFilter),
+    Driver.countDocuments(referredFilter),
+    User.countDocuments(pendingFilter),
+    Driver.countDocuments(pendingFilter),
+    WalletTransaction.aggregate([
+      { $match: { 'metadata.source': 'driver_referral', amount: { $gt: 0 } } },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]),
+    // Rider wallets keep their last 50 entries only, so very old rider
+    // rewards may be missing from this total.
+    UserWallet.aggregate([
+      { $unwind: '$transactions' },
+      { $match: { 'transactions.referenceKey': { $regex: '^user-referral:' } } },
+      { $group: { _id: null, total: { $sum: '$transactions.amount' } } },
+    ]),
+    monthly(User),
+    monthly(Driver),
   ]);
 
-  // Mocking some parts for the dashboard view
+  const earning = Number(driverEarning[0]?.total || 0) + Number(userEarning[0]?.total || 0);
+
   return {
     total_drivers: totalDrivers,
     total_users: totalUsers,
-    active_referrals: 0,
-    referral_earning: 0,
+    // Referred people whose referrer has not been rewarded yet.
+    active_referrals: pendingUsers + pendingDrivers,
+    referral_earning: Math.round(earning * 100) / 100,
     user_referrals: {
-      normal_user: totalUsers,
-      referral_user: 0,
-      monthly: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      normal_user: totalUsers - referredUsers,
+      referral_user: referredUsers,
+      monthly: userMonthly,
     },
     driver_referrals: {
-      normal_driver: totalDrivers,
-      referral_driver: 0,
-      monthly: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    }
+      normal_driver: totalDrivers - referredDrivers,
+      referral_driver: referredDrivers,
+      monthly: driverMonthly,
+    },
   };
 };
 
