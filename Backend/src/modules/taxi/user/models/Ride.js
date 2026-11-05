@@ -514,6 +514,12 @@ const rideSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    // Added to the driver's wallet by the company, on top of the fare.
+    companyIncentive: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     walletSettledAt: {
       type: Date,
       default: null,

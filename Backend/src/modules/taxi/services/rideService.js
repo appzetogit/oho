@@ -9,6 +9,7 @@ import { Vehicle } from '../admin/models/Vehicle.js';
 import { Driver } from '../driver/models/Driver.js';
 import { WalletTransaction } from '../driver/models/WalletTransaction.js';
 import { incrementDriverTodaySummaryForCompletedRide } from '../driver/services/driverTodaySummaryService.js';
+import { payRideIncentive } from '../rideIncentives/services/incentiveService.js';
 import { applyDriverWalletAdjustment, ensureDriverWalletCanAcceptRide, settleCompletedRideWallet } from '../driver/services/walletService.js';
 import { sendRideInvoiceEmail } from './invoiceService.js';
 import { Delivery } from '../user/models/Delivery.js';
@@ -1338,6 +1339,7 @@ export const serializeRideRealtime = (ride) => ({
   intercity: ride.intercity || null,
   commissionAmount: ride.commissionAmount,
   driverEarnings: ride.driverEarnings,
+  companyIncentive: ride.companyIncentive || 0,
   promo: ride.promo?.code ? ride.promo : null,
   pricingSnapshot: ride.pricingSnapshot
     ? {
@@ -1492,6 +1494,7 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
       'pricingSnapshot',
       'commissionAmount',
       'driverEarnings',
+      'companyIncentive',
       'vehicleIconType',
       'vehicleIconUrl',
       'pickupLocation',
@@ -1550,6 +1553,7 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
     pricingSnapshot: ride.pricingSnapshot || null,
     commissionAmount: ride.commissionAmount,
     driverEarnings: ride.driverEarnings,
+  companyIncentive: ride.companyIncentive || 0,
     vehicleIconType: ride.vehicleIconType,
     // Keep history responses light; giant data URLs can stall the activity screen.
     vehicleIconUrl: String(ride.vehicleIconUrl || '').startsWith('data:') ? '' : (ride.vehicleIconUrl || ''),
@@ -1770,13 +1774,19 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
     ]);
 
     walletUpdate = await settleCompletedRideWallet({ rideId: ride._id });
+    // A problem here must never stop a ride completing. The sweep retries a ride
+    // that was never attempted, and a failed one is shown to admins.
+    const companyIncentive = await payRideIncentive(ride._id).catch((error) => {
+      console.error('[ride-incentive] could not pay ride', String(ride._id), error);
+      return 0;
+    });
     await consumeUserSubscriptionRide({ ride });
     const settledRide = await Ride.findById(ride._id).select('completedAt driverEarnings estimatedDistanceMeters');
 
     await incrementDriverTodaySummaryForCompletedRide({
       driverId,
       completedAt: settledRide?.completedAt || ride.completedAt,
-      driverEarnings: settledRide?.driverEarnings,
+      driverEarnings: Number(settledRide?.driverEarnings || 0) + companyIncentive,
       distanceMeters: settledRide?.estimatedDistanceMeters,
     });
 

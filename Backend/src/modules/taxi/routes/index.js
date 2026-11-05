@@ -10,6 +10,7 @@ import { legacyCompatRouter } from '../compat/legacyCompatRoutes.js';
 import { coinsRouter } from '../coins/routes/coinRoutes.js';
 import { payoutsRouter } from '../payouts/routes/payoutRoutes.js';
 import { milestonesRouter } from '../milestones/routes/milestoneRoutes.js';
+import { rideIncentivesRouter } from '../rideIncentives/routes/incentiveRoutes.js';
 import { appVersionRouter } from '../appVersion/appVersion.js';
 import { captureFcmTokenOnAuth, FCM_CAPTURE_PATHS } from '../middlewares/captureFcmTokenOnAuth.js';
 
@@ -22,6 +23,7 @@ taxiRouter.use(FCM_CAPTURE_PATHS, captureFcmTokenOnAuth);
 taxiRouter.use(coinsRouter);
 taxiRouter.use(payoutsRouter);
 taxiRouter.use(milestonesRouter);
+taxiRouter.use(rideIncentivesRouter);
 taxiRouter.use(appVersionRouter);
 taxiRouter.use(chatModuleRouter);
 taxiRouter.use(adminModuleRouter);

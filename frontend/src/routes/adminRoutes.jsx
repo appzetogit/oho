@@ -7,6 +7,7 @@ import {
   AdminAirportManagement,
   AdminBannerImage,
   AdminRiderCoins,
+  AdminRideIncentive,
   AdminAppVersionSettings,
   AdminBidRideSettings,
   AdminBlockedFleetDrivers,
@@ -271,6 +272,7 @@ const adminRoutes = (
       <Route path="promotions/banner-image" element={<AdminBannerImage />} />
       <Route path="promotions/banner-image/create" element={<AdminBannerImage />} />
       <Route path="promotions/rider-coins" element={<AdminRiderCoins />} />
+      <Route path="promotions/ride-incentive" element={<AdminRideIncentive />} />
       <Route path="settings/app/app-version" element={<AdminAppVersionSettings />} />
 
       <Route path="management/admins" element={<AdminAdmins />} />

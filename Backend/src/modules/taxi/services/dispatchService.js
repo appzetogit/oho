@@ -1772,6 +1772,7 @@ export const notifyRideAccepted = async (ride) => {
     intercity: populatedRide.intercity || null,
     commissionAmount: populatedRide.commissionAmount,
     driverEarnings: populatedRide.driverEarnings,
+    companyIncentive: populatedRide.companyIncentive || 0,
     pickupLocation: populatedRide.pickupLocation,
     pickupAddress: populatedRide.pickupAddress || '',
     dropLocation: populatedRide.dropLocation,

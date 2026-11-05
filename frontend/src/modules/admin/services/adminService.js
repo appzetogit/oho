@@ -98,6 +98,9 @@ export const adminService = {
   getReferralSettings: (type) => api.get(`/admin/referrals/settings/${type}`),
   updateReferralSettings: (type, data) => api.patch(`/admin/referrals/settings/${type}`, data),
   getMilestonePayouts: (limit = 20) => api.get('/admin/driver-milestones/payouts', { params: { limit } }),
+  getRideIncentiveSettings: () => api.get('/admin/ride-incentives/settings'),
+  updateRideIncentiveSettings: (data) => api.put('/admin/ride-incentives/settings', data),
+  getRideIncentivePayouts: (limit = 30) => api.get('/admin/ride-incentives/payouts', { params: { limit } }),
   // Wallet Payment APIs
   searchUsers: (query) => api.get(`/admin/users?search=${encodeURIComponent(query)}`),
   searchDrivers: (query) => api.get(`/admin/drivers?search=${query}`),

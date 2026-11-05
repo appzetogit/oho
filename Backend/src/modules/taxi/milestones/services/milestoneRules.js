@@ -47,7 +47,7 @@ const phoneEntries = (value) =>
     .map((item) => String(item).trim())
     .filter(Boolean);
 
-const parsePhones = (value) => [
+export const parsePhones = (value) => [
   ...new Set(phoneEntries(value).map(lastTenDigits).filter((phone) => phone.length === 10)),
 ];
 
