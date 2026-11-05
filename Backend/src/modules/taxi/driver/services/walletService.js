@@ -299,7 +299,16 @@ export const applyDriverWalletAdjustment = async ({
  * Returns null when there was nothing to do, so callers can stay quiet.
  */
 export const grantDriverJoiningBonus = async ({ driverId, grantedBy = null }) => {
-  const amount = normalizeAmount(env.driverWallet.joiningBonus);
+  // The admin's wallet settings decide this. The server's own value is only for
+  // an install where nobody has set an amount yet.
+  const walletSettings = await getWalletSettings();
+  if (!isEnabledSetting(walletSettings.enable_joining_bonus, true)) {
+    return null;
+  }
+  const configuredAmount = Number(walletSettings.joining_bonus_for_driver);
+  const amount = normalizeAmount(
+    Number.isFinite(configuredAmount) ? configuredAmount : env.driverWallet.joiningBonus,
+  );
 
   if (!amount || amount <= 0) {
     return null;
