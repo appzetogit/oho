@@ -11,6 +11,12 @@ import api from '../../../../shared/api/axiosInstance';
 
 const AMOUNT_FIELDS = [
   {
+    name: 'joining_bonus_for_driver',
+    label: 'Driver welcome bonus',
+    help: 'Added to the wallet once, when a driver is first approved. Set 0 for no bonus.',
+    placeholder: '50',
+  },
+  {
     name: 'driver_wallet_minimum_amount_to_get_an_order',
     label: 'Driver minimum balance to get orders',
     help: 'Driver app blocks new orders when wallet balance is below this amount. Use a negative value to allow cash debt.',
@@ -37,6 +43,11 @@ const AMOUNT_FIELDS = [
 ];
 
 const SWITCH_FIELDS = [
+  {
+    name: 'enable_joining_bonus',
+    label: 'Driver welcome bonus enabled',
+    help: 'When off, newly approved drivers get no welcome bonus.',
+  },
   {
     name: 'show_wallet_feature_for_driver',
     label: 'Driver wallet enabled',
