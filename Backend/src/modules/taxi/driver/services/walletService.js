@@ -38,6 +38,19 @@ const computeCommissionAmount = ({ fare, type, value }) => {
   return Math.min(safeValue, safeFare);
 };
 
+/** The commission settlement would take on this ride, for showing on the offer. */
+export const estimateRideCommission = async (ride) => {
+  // Settlement reads a full ride document, where a missing commission is 0, so
+  // it always uses what's saved on the ride. Some callers pass plain objects, so
+  // apply the same defaults here or the offer and the payment could disagree.
+  const snapshot = ride.pricingSnapshot || {};
+  return computeCommissionAmount({
+    fare: ride.fare || 0,
+    type: Number(snapshot.admin_commission_type_from_driver ?? 1),
+    value: Number(snapshot.admin_commission_from_driver ?? 0),
+  });
+};
+
 const resolveCommissionConfigForRide = async (ride, session) => {
   if (ride?.pricingSnapshot?.admin_commission_from_driver !== undefined) {
     return {

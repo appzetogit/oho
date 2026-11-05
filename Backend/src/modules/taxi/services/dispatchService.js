@@ -18,7 +18,7 @@ import { getRideRoom, resolveSetPriceForRide } from './rideService.js';
 import { SOCKET_EVENTS } from '../socket/events.js';
 import { resolveTransportDispatchConfig } from './transportSettingsService.js';
 import { sendPushNotificationToEntities } from './pushNotificationService.js';
-import { estimateRideIncentives } from '../rideIncentives/services/incentiveService.js';
+import { estimateOfferEarnings } from '../rideIncentives/services/incentiveService.js';
 import { notifyRideCancelledByUser } from './rideNotificationService.js';
 
 const activeDispatches = new Map();
@@ -795,9 +795,9 @@ const emitRideRequestToDrivers = async ({
 
   const requestExpiresAt = new Date(Date.now() + dispatchConfig.retryDelayMs).toISOString();
 
-  // What the company would add for each driver, so they see the full amount
-  // before deciding. A problem here must never stop the offer going out.
-  const incentives = await estimateRideIncentives(ride, targetDrivers.map((driver) => driver._id))
+  // What each driver would really keep, so they see it before deciding. A
+  // problem here must never stop the offer going out.
+  const earnings = await estimateOfferEarnings(ride, targetDrivers.map((driver) => driver._id))
     .catch((error) => {
       console.error('[ride-incentive] could not estimate for ride', String(ride._id), error);
       return new Map();
@@ -827,7 +827,8 @@ const emitRideRequestToDrivers = async ({
       vehicleIconType: ride.vehicleIconType,
       vehicleIconUrl: ride.vehicleIconUrl || '',
       fare: ride.fare,
-      companyIncentive: incentives.get(String(driver._id)) || 0,
+      companyIncentive: earnings.get(String(driver._id))?.companyIncentive || 0,
+      estimatedCommission: earnings.get(String(driver._id))?.estimatedCommission || 0,
       baseFare: Number(ride.baseFare || ride.fare || 0),
       bookingMode: ride.bookingMode || 'normal',
       pricingNegotiationMode: ride.pricingNegotiationMode || 'none',
@@ -881,8 +882,10 @@ const emitRideRequestToDrivers = async ({
         // drawable with the app killed and no network, so anything missing here
         // simply cannot be shown.
         fare: formatOfferFare(ride.fare),
-        // Added by the company on top of `fare`. "0" if none.
-        companyIncentive: formatOfferFare(incentives.get(String(driver._id)) || 0),
+        // Added by the company on top of `fare`, and the commission that comes
+        // off, so the card can show what the driver keeps. "0" if no incentive.
+        companyIncentive: formatOfferFare(earnings.get(String(driver._id))?.companyIncentive || 0),
+        estimatedCommission: formatOfferFare(earnings.get(String(driver._id))?.estimatedCommission || 0),
         // What the rider added with "book again" on top of the quoted fare
         // (already inside `fare`), so the card can highlight it. "0" if none.
         extraFare: formatOfferFare(Math.max(0, Number(ride.fare || 0) - Number(ride.baseFare || ride.fare || 0))),

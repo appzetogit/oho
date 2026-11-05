@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import { ApiError } from '../../../../utils/ApiError.js';
 import { Vehicle } from '../../admin/models/Vehicle.js';
 import { Driver } from '../../driver/models/Driver.js';
-import { applyDriverWalletAdjustment } from '../../driver/services/walletService.js';
+import { applyDriverWalletAdjustment, estimateRideCommission } from '../../driver/services/walletService.js';
 import { monthOf, toIstDayKey } from '../../milestones/services/milestoneRules.js';
 import { sendPushNotificationToEntities } from '../../services/pushNotificationService.js';
 import { Ride } from '../../user/models/Ride.js';
@@ -112,6 +112,24 @@ export const estimateRideIncentives = async (ride, driverIds = []) => {
     if (decision.pay) amounts.set(String(driver._id), decision.amount);
   }
   return amounts;
+};
+
+/**
+ * The numbers an offer needs, for each of these drivers who'd earn an incentive:
+ * the incentive itself, and the commission that comes off, so the app can show
+ * what the driver really keeps. Commission is only sent alongside an incentive,
+ * so rides without one look exactly as they always have.
+ */
+export const estimateOfferEarnings = async (ride, driverIds = []) => {
+  const earnings = new Map();
+  const incentives = await estimateRideIncentives(ride, driverIds);
+  if (incentives.size === 0) return earnings;
+
+  const estimatedCommission = await estimateRideCommission(ride);
+  for (const [driverId, companyIncentive] of incentives) {
+    earnings.set(driverId, { companyIncentive, estimatedCommission });
+  }
+  return earnings;
 };
 
 /** Records what the driver who accepted was promised, so they get what they saw. */
