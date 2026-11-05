@@ -97,6 +97,7 @@ export const adminService = {
     api.patch(`/admin/referrals/translation/${languageCode}`, data),
   getReferralSettings: (type) => api.get(`/admin/referrals/settings/${type}`),
   updateReferralSettings: (type, data) => api.patch(`/admin/referrals/settings/${type}`, data),
+  getMilestonePayouts: (limit = 20) => api.get('/admin/driver-milestones/payouts', { params: { limit } }),
   // Wallet Payment APIs
   searchUsers: (query) => api.get(`/admin/users?search=${encodeURIComponent(query)}`),
   searchDrivers: (query) => api.get(`/admin/drivers?search=${query}`),

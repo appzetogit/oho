@@ -8,6 +8,7 @@ import { BusDriver } from '../driver/models/BusDriver.js';
 import { PoolingVehicle } from '../admin/models/PoolingVehicle.js';
 import { User } from '../user/models/User.js';
 import { verifyAccessToken } from '../services/tokenService.js';
+import { recordDriverOnlineTime } from '../milestones/services/onlineTimeService.js';
 import {
   normalizeAdminPermissions,
   normalizeAdminType,
@@ -58,7 +59,15 @@ const touchDriverLastSeen = (driverId) => {
     }
   }
 
-  Driver.updateOne({ _id: driverId }, { $set: { lastSeenAt: new Date(now) } })
+  // Reads the old values in the same step as overwriting them: both workers
+  // heartbeat, and this way each stretch of online time is counted only once.
+  Driver.findOneAndUpdate(
+    { _id: driverId },
+    { $set: { lastSeenAt: new Date(now) } },
+    { returnDocument: 'before', projection: { lastSeenAt: 1, isOnline: 1 } },
+  )
+    .lean()
+    .then((previous) => recordDriverOnlineTime(driverId, previous, new Date(now)))
     .catch((error) => console.warn('[presence] could not record last seen:', error.message));
 };
 

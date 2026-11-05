@@ -25,6 +25,11 @@ import { RentalVehicleType } from "../../admin/models/RentalVehicleType.js";
 import { RentalBookingRequest } from "../../admin/models/RentalBookingRequest.js";
 import { CustomerBiometricProfile } from "../../admin/models/CustomerBiometricProfile.js";
 import { AdminBusinessSetting } from "../../admin/models/AdminBusinessSetting.js";
+import {
+  claimDriverMilestone,
+  getDriverMilestoneHistory,
+  getDriverMilestones,
+} from "../../milestones/services/milestoneService.js";
 import { isDriverOnlineSelfieRequired } from "../../services/transportSettingsService.js";
 import { Notification } from "../../admin/promotions/models/Notification.js";
 import { FleetVehicle } from "../../admin/models/FleetVehicle.js";
@@ -1296,46 +1301,7 @@ const buildDriverIncentiveSnapshot = ({ driver, settings, rides }) => {
   const tracking = driver?.incentiveTracking || {};
   const dailyActivity = Array.isArray(tracking.dailyActivity) ? tracking.dailyActivity : [];
   const claimedRewards = Array.isArray(tracking.claimedRewards) ? tracking.claimedRewards : [];
-  const milestonePrograms = Array.isArray(settings?.milestone_programs) ? settings.milestone_programs : [];
   const rewardFeatures = Array.isArray(settings?.reward_features) ? settings.reward_features : [];
-  const dailyActivityMap = new Map(dailyActivity.map((item) => [item.date, Number(item.activeMinutes || 0)]));
-
-  const milestones = milestonePrograms.map((item, index) => {
-    const requiredWeeks = Math.max(1, Number(item.required_weeks || 1));
-    const requiredHours = Math.max(0, Number(item.active_hours_per_day || 0));
-    const minTripsPerWeek = Math.max(0, Number(item.min_trips_per_week || 0));
-    const weekWindows = collectWeekWindows(requiredWeeks, new Date());
-    const qualifyingWeeks = weekWindows.filter((week) => {
-      const tripCount = countCompletedRidesInRange(rides, week.start, week.end);
-      return tripCount >= minTripsPerWeek;
-    }).length;
-
-    const targetDays = requiredWeeks * 7;
-    let qualifyingDays = 0;
-    for (let offset = 0; offset < targetDays; offset += 1) {
-      const day = new Date(getIstDayStart(new Date()).getTime() - offset * DAY_MS);
-      const dayKey = toIstDayKey(day);
-      if ((Number(dailyActivityMap.get(dayKey) || 0) / 60) >= requiredHours) {
-        qualifyingDays += 1;
-      }
-    }
-
-    const periodKey = `milestone:${item.id || index}`;
-    const eligible = Boolean(item.enabled) && qualifyingWeeks >= requiredWeeks && qualifyingDays >= targetDays;
-
-    return {
-      ...item,
-      periodKey,
-      progress: {
-        qualifyingWeeks,
-        targetWeeks: requiredWeeks,
-        qualifyingDays,
-        targetDays,
-      },
-      isEligible: eligible,
-      isClaimed: hasClaimedReward(claimedRewards, "milestone", item.id || String(index), periodKey),
-    };
-  });
 
   const currentWeekWindow = collectWeekWindows(1, new Date())[0];
   const currentWeekTrips = currentWeekWindow ? countCompletedRidesInRange(rides, currentWeekWindow.start, currentWeekWindow.end) : 0;
@@ -1432,7 +1398,6 @@ const buildDriverIncentiveSnapshot = ({ driver, settings, rides }) => {
       monthCancellationRate: cancellationRate,
       totalClaimedRewards: claimedRewards.length,
     },
-    milestones,
     features,
     claimedRewards,
     walletBalance: Number(driver?.wallet?.balance || 0),
@@ -9950,9 +9915,19 @@ export const getDriverIncentives = async (req, res) => {
     rides,
   });
 
+  const milestoneHistory = await getDriverMilestoneHistory(driver._id);
+
   res.json({
     success: true,
-    data: snapshot,
+    data: {
+      ...snapshot,
+      milestones: await getDriverMilestones(driver),
+      claimedRewards: [...snapshot.claimedRewards, ...milestoneHistory],
+      summary: {
+        ...snapshot.summary,
+        totalClaimedRewards: snapshot.summary.totalClaimedRewards + milestoneHistory.length,
+      },
+    },
   });
 };
 
@@ -9963,6 +9938,14 @@ export const claimDriverIncentiveReward = async (req, res) => {
 
   if (!["milestone", "feature"].includes(normalizedRewardType) || !normalizedRewardKey) {
     throw new ApiError(400, "Valid reward type and reward key are required");
+  }
+
+  if (normalizedRewardType === "milestone") {
+    res.json({
+      success: true,
+      data: await claimDriverMilestone({ driverId: req.auth.sub, milestoneId: normalizedRewardKey }),
+    });
+    return;
   }
 
   const driver = await Driver.findById(req.auth.sub);
@@ -9991,10 +9974,7 @@ export const claimDriverIncentiveReward = async (req, res) => {
     rides,
   });
 
-  const targetReward =
-    normalizedRewardType === "milestone"
-      ? snapshot.milestones.find((item) => String(item.id) === normalizedRewardKey)
-      : snapshot.features.find((item) => String(item.key) === normalizedRewardKey);
+  const targetReward = snapshot.features.find((item) => String(item.key) === normalizedRewardKey);
 
   if (!targetReward) {
     throw new ApiError(404, "Reward not found");
@@ -10012,7 +9992,7 @@ export const claimDriverIncentiveReward = async (req, res) => {
     ...(Array.isArray(driver.incentiveTracking?.claimedRewards) ? driver.incentiveTracking.claimedRewards : []),
     {
       rewardType: normalizedRewardType,
-      rewardKey: normalizedRewardType === "milestone" ? String(targetReward.id) : String(targetReward.key),
+      rewardKey: String(targetReward.key),
       periodKey: targetReward.periodKey,
       amount: Number(targetReward.payout_amount ?? targetReward.reward_amount ?? 0),
       claimedAt: new Date(),
@@ -10040,7 +10020,7 @@ export const claimDriverIncentiveReward = async (req, res) => {
     metadata: {
       category: "driver_incentive",
       rewardType: normalizedRewardType,
-      rewardKey: normalizedRewardType === "milestone" ? String(targetReward.id) : String(targetReward.key),
+      rewardKey: String(targetReward.key),
       periodKey: targetReward.periodKey,
     },
   });

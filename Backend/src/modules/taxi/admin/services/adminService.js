@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { randomBytes } from 'node:crypto';
 import { ApiError } from '../../../../utils/ApiError.js';
+import { milestoneProblem, normalizeMilestone, phoneListProblem } from '../../milestones/services/milestoneRules.js';
 import { env } from '../../../../config/env.js';
 import { createDefaultAdminState } from '../data/defaultAdminState.js';
 import { Admin } from '../models/Admin.js';
@@ -5639,16 +5640,17 @@ export const getReferralSettings = async (type) => {
 
 const sanitizeReferralMilestones = (items = []) =>
   (Array.isArray(items) ? items : [])
-    .map((item, index) => ({
-      id: String(item?.id || `milestone_${index + 1}`).trim(),
-      name: String(item?.name || `Milestone ${index + 1}`).trim(),
-      enabled: Boolean(item?.enabled ?? true),
-      active_hours_per_day: Math.max(0, Number(item?.active_hours_per_day ?? 0) || 0),
-      required_weeks: Math.max(0, Number(item?.required_weeks ?? 0) || 0),
-      min_trips_per_week: Math.max(0, Number(item?.min_trips_per_week ?? 0) || 0),
-      payout_amount: Math.max(0, Number(item?.payout_amount ?? 0) || 0),
-      notes: String(item?.notes || '').trim(),
-    }))
+    .map((item, index) => {
+      const milestone = normalizeMilestone(item, index);
+      const problem = phoneListProblem(milestone.name, item?.only_driver_phones) || milestoneProblem(milestone);
+      if (problem) throw new ApiError(400, problem);
+      // Older app versions still read these two.
+      return {
+        ...milestone,
+        required_weeks: Math.ceil(milestone.required_days / 7),
+        min_trips_per_week: milestone.min_trips,
+      };
+    })
     .filter((item) => item.name);
 
 const sanitizeReferralRewardFeatures = (items = []) =>

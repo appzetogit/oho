@@ -187,7 +187,9 @@ const DriverIncentives = () => {
           <div className="space-y-3">
             {milestones.map((milestone) => {
               const claimKey = `milestone:${milestone.id}`;
-              const progress = progressPercent(milestone.progress?.qualifyingDays, milestone.progress?.targetDays);
+              const progress = milestone.required_days > 1
+                ? progressPercent(milestone.progress?.qualifyingDays, milestone.progress?.targetDays)
+                : progressPercent(milestone.progress?.onlineMinutesToday, milestone.progress?.requiredMinutesPerDay);
               const canClaim = milestone.isEligible && !milestone.isClaimed;
 
               return (
@@ -195,7 +197,7 @@ const DriverIncentives = () => {
                   <div className="flex justify-between items-start mb-4">
                     <div className="space-y-1">
                       <h4 className="font-bold text-gray-900">{milestone.name}</h4>
-                      <p className="text-xs text-gray-500">{milestone.required_weeks} weeks consistency challenge</p>
+                      <p className="text-xs text-gray-500">{milestone.active_hours_per_day > 0 ? `${milestone.active_hours_per_day} hours online${milestone.required_days > 1 ? ` a day for ${milestone.required_days} days` : ' today'}` : `${milestone.min_trips} trips`}</p>
                     </div>
                     <div className="text-right">
                       <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Reward</p>
@@ -206,7 +208,7 @@ const DriverIncentives = () => {
                   <div className="space-y-1.5 mb-5">
                     <div className="flex justify-between text-[10px] font-bold text-gray-400">
                       <span>Progress</span>
-                      <span>{milestone.progress?.qualifyingDays || 0}/{milestone.progress?.targetDays || 0} days</span>
+                      <span>{milestone.required_days > 1 ? `${milestone.progress?.qualifyingDays || 0}/${milestone.progress?.targetDays || 0} days` : `${milestone.progress?.onlineMinutesToday || 0}/${milestone.progress?.requiredMinutesPerDay || 0} min`}</span>
                     </div>
                     <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
                       <div className="h-full bg-blue-600 rounded-full" style={{ width: `${progress}%` }} />
@@ -224,7 +226,7 @@ const DriverIncentives = () => {
                         : 'bg-gray-50 text-gray-400 border border-gray-100'
                     }`}
                   >
-                    {claimingKey === claimKey ? 'Claiming...' : milestone.isClaimed ? 'Reward Claimed' : 'Ongoing'}
+                    {claimingKey === claimKey ? 'Claiming...' : milestone.isClaimed ? (milestone.paysAutomatically ? 'Paid to wallet' : 'Reward Claimed') : milestone.paysAutomatically ? 'Paid automatically' : canClaim ? 'Claim' : 'Ongoing'}
                   </button>
                 </div>
               );

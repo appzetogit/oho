@@ -9,6 +9,7 @@ import { careerRouter } from '../career/routes/careerRoutes.js';
 import { legacyCompatRouter } from '../compat/legacyCompatRoutes.js';
 import { coinsRouter } from '../coins/routes/coinRoutes.js';
 import { payoutsRouter } from '../payouts/routes/payoutRoutes.js';
+import { milestonesRouter } from '../milestones/routes/milestoneRoutes.js';
 import { appVersionRouter } from '../appVersion/appVersion.js';
 import { captureFcmTokenOnAuth, FCM_CAPTURE_PATHS } from '../middlewares/captureFcmTokenOnAuth.js';
 
@@ -20,6 +21,7 @@ taxiRouter.use(FCM_CAPTURE_PATHS, captureFcmTokenOnAuth);
 // Before the admin and user routers, so neither can swallow its paths.
 taxiRouter.use(coinsRouter);
 taxiRouter.use(payoutsRouter);
+taxiRouter.use(milestonesRouter);
 taxiRouter.use(appVersionRouter);
 taxiRouter.use(chatModuleRouter);
 taxiRouter.use(adminModuleRouter);

@@ -24,12 +24,47 @@ const defaultMilestone = (index = 1) => ({
   id: `milestone_${Date.now()}_${index}`,
   name: '',
   enabled: true,
-  active_hours_per_day: 8,
-  required_weeks: 4,
-  min_trips_per_week: 40,
-  payout_amount: 500,
+  repeat: 'daily',
+  required_days: 1,
+  active_hours_per_day: 6,
+  min_trips: 0,
+  payout_amount: 50,
+  payout_mode: 'auto',
+  max_payouts_per_month: 30,
+  start_date: '',
+  end_date: '',
+  only_driver_phones: '',
   notes: '',
 });
+
+const repeatOptions = [
+  { value: 'daily', label: 'Every day', phrase: 'every day' },
+  { value: 'weekly', label: 'Every week', phrase: 'every week' },
+  { value: 'once', label: 'Once only', phrase: 'one time' },
+];
+
+const payoutModes = [
+  { value: 'auto', label: 'Automatic to wallet' },
+  { value: 'claim', label: 'Driver presses Claim' },
+];
+
+// Says back in plain words what the settings will actually do with money.
+const describeMilestone = (item) => {
+  const hours = Number(item.active_hours_per_day || 0);
+  const days = Math.max(1, Number(item.required_days || 1));
+  const trips = Number(item.min_trips || 0);
+  const limit = Number(item.max_payouts_per_month || 0);
+  const needs = [];
+  if (hours > 0) needs.push(`${hours} hours online ${days > 1 ? `a day for ${days} days in a row` : 'in a day'}`);
+  else if (days > 1) needs.push(`within ${days} days`);
+  if (trips > 0) needs.push(`${trips} completed trip${trips === 1 ? '' : 's'}`);
+  if (!needs.length) return 'Needs online hours or minimum trips before it can be saved.';
+  const phrase = repeatOptions.find((option) => option.value === item.repeat)?.phrase || 'one time';
+  const how = item.payout_mode === 'auto' ? 'automatically' : 'when the driver claims it';
+  const cap = limit > 0 ? `, at most ${limit} times a month` : ', with no monthly limit';
+  const who = String(item.only_driver_phones || '').trim() ? ' Only the listed drivers can earn it.' : '';
+  return `Pays ₹${Number(item.payout_amount || 0)} ${phrase} for ${needs.join(' and ')}, ${how}${cap}.${who}`;
+};
 
 const defaultRewardFeatures = [
   {
@@ -94,16 +129,30 @@ const defaultRewardFeatures = [
   },
 ];
 
-const normalizeMilestone = (item, index = 1) => ({
-  ...defaultMilestone(index),
-  ...item,
-  enabled: item?.enabled ?? true,
-  active_hours_per_day: Number(item?.active_hours_per_day ?? 8),
-  required_weeks: Number(item?.required_weeks ?? 4),
-  min_trips_per_week: Number(item?.min_trips_per_week ?? 40),
-  payout_amount: Number(item?.payout_amount ?? 500),
-  notes: item?.notes || '',
-});
+const normalizeMilestone = (item, index = 1) => {
+  // Saved before these settings existed: a one-off claimed after full weeks.
+  const isLegacy = item?.repeat === undefined;
+  const legacyWeeks = Math.max(1, Number(item?.required_weeks || 0));
+
+  return {
+    ...defaultMilestone(index),
+    ...item,
+    enabled: item?.enabled ?? true,
+    repeat: isLegacy ? 'once' : item.repeat,
+    required_days: isLegacy ? legacyWeeks * 7 : Number(item?.required_days ?? 1),
+    active_hours_per_day: Number(item?.active_hours_per_day ?? 6),
+    min_trips: isLegacy ? Number(item?.min_trips_per_week || 0) * legacyWeeks : Number(item?.min_trips ?? 0),
+    payout_amount: Number(item?.payout_amount ?? 50),
+    payout_mode: isLegacy ? 'claim' : (item?.payout_mode || 'auto'),
+    max_payouts_per_month: isLegacy ? 0 : Number(item?.max_payouts_per_month ?? 30),
+    start_date: item?.start_date || '',
+    end_date: item?.end_date || '',
+    only_driver_phones: Array.isArray(item?.only_driver_phones)
+      ? item.only_driver_phones.join(', ')
+      : (item?.only_driver_phones || ''),
+    notes: item?.notes || '',
+  };
+};
 
 const normalizeFeature = (baseFeature, storedFeature = {}) => ({
   ...baseFeature,
@@ -149,6 +198,7 @@ const DriverReferralSettings = () => {
   const [saving, setSaving] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [settings, setSettings] = useState(() => normalizeDriverReferralSettings());
+  const [payouts, setPayouts] = useState(null);
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -163,7 +213,17 @@ const DriverReferralSettings = () => {
       }
     };
 
+    const fetchPayouts = async () => {
+      try {
+        const res = await adminService.getMilestonePayouts(20);
+        setPayouts(res.data || null);
+      } catch (err) {
+        console.error('Payouts fetch error:', err);
+      }
+    };
+
     fetchSettings();
+    fetchPayouts();
   }, []);
 
   const handleUpdate = async () => {
@@ -178,8 +238,9 @@ const DriverReferralSettings = () => {
           ...item,
           id: item.id || `milestone_${index + 1}`,
           active_hours_per_day: Number(item.active_hours_per_day || 0),
-          required_weeks: Number(item.required_weeks || 0),
-          min_trips_per_week: Number(item.min_trips_per_week || 0),
+          required_days: Number(item.required_days || 1),
+          min_trips: Number(item.min_trips || 0),
+          max_payouts_per_month: Number(item.max_payouts_per_month || 0),
           payout_amount: Number(item.payout_amount || 0),
         })),
         reward_features: settings.reward_features.map((item, index) => ({
@@ -198,7 +259,8 @@ const DriverReferralSettings = () => {
       }
     } catch (err) {
       console.error('Update error:', err);
-      toast.error('Failed to update settings');
+      // The server says exactly what's wrong, e.g. an invalid phone number.
+      toast.error(err?.response?.data?.message || err?.message || 'Failed to update settings');
     } finally {
       setSaving(false);
     }
@@ -215,7 +277,7 @@ const DriverReferralSettings = () => {
       toast.success('Driver referral settings toggled');
       setTimeout(() => setShowSuccess(false), 3000);
     } catch (err) {
-      toast.error('Failed to toggle settings');
+      toast.error(err?.response?.data?.message || err?.message || 'Failed to toggle settings');
       setSettings(previous);
     }
   };
@@ -381,7 +443,7 @@ const DriverReferralSettings = () => {
                   </div>
                   <div>
                     <h3 className="text-sm font-bold text-gray-900 ">Driver Milestone Program</h3>
-                    <p className="text-xs text-gray-500">Create milestone payout slabs based on daily active time and sustained weekly performance.</p>
+                    <p className="text-xs text-gray-500">Pay drivers for online hours and trips. Nothing is paid while this switch is off, and changes apply after you press Update below.</p>
                   </div>
                 </div>
                 <button
@@ -423,7 +485,7 @@ const DriverReferralSettings = () => {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
                       <div className="xl:col-span-2">
                         <label className={labelClass}>Milestone Name</label>
                         <input
@@ -431,33 +493,102 @@ const DriverReferralSettings = () => {
                           value={item.name}
                           onChange={(e) => updateMilestone(index, 'name', e.target.value)}
                           className={inputClass}
-                          placeholder="30-day active streak"
+                          placeholder="6 hours online daily bonus"
                         />
                       </div>
                       <div>
-                        <label className={labelClass}>Active Hours / Day</label>
+                        <label className={labelClass}>Payout Amount (₹)</label>
                         <input
                           type="number"
+                          min="0"
+                          value={item.payout_amount}
+                          onChange={(e) => updateMilestone(index, 'payout_amount', e.target.value)}
+                          className={inputClass}
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass}>Repeats</label>
+                        <select
+                          value={item.repeat}
+                          onChange={(e) => updateMilestone(index, 'repeat', e.target.value)}
+                          className={inputClass}
+                        >
+                          {repeatOptions.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className={labelClass}>Online Hours / Day</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="24"
+                          step="0.5"
                           value={item.active_hours_per_day}
                           onChange={(e) => updateMilestone(index, 'active_hours_per_day', e.target.value)}
                           className={inputClass}
                         />
                       </div>
                       <div>
-                        <label className={labelClass}>Required Weeks</label>
+                        <label className={labelClass}>Days In A Row</label>
                         <input
                           type="number"
-                          value={item.required_weeks}
-                          onChange={(e) => updateMilestone(index, 'required_weeks', e.target.value)}
+                          min="1"
+                          value={item.required_days}
+                          onChange={(e) => updateMilestone(index, 'required_days', e.target.value)}
                           className={inputClass}
                         />
                       </div>
                       <div>
-                        <label className={labelClass}>Payout Amount</label>
+                        <label className={labelClass}>Minimum Trips</label>
                         <input
                           type="number"
-                          value={item.payout_amount}
-                          onChange={(e) => updateMilestone(index, 'payout_amount', e.target.value)}
+                          min="0"
+                          value={item.min_trips}
+                          onChange={(e) => updateMilestone(index, 'min_trips', e.target.value)}
+                          className={inputClass}
+                        />
+                        <p className="mt-1 text-[11px] text-gray-400">Completed across those days. 0 = none needed.</p>
+                      </div>
+                      <div>
+                        <label className={labelClass}>Max Payouts / Month</label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={item.max_payouts_per_month}
+                          onChange={(e) => updateMilestone(index, 'max_payouts_per_month', e.target.value)}
+                          className={inputClass}
+                        />
+                        <p className="mt-1 text-[11px] text-gray-400">Per driver. 0 = no limit.</p>
+                      </div>
+                      <div>
+                        <label className={labelClass}>Payment</label>
+                        <select
+                          value={item.payout_mode}
+                          onChange={(e) => updateMilestone(index, 'payout_mode', e.target.value)}
+                          className={inputClass}
+                        >
+                          {payoutModes.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className={labelClass}>Start Date (optional)</label>
+                        <input
+                          type="date"
+                          value={item.start_date}
+                          onChange={(e) => updateMilestone(index, 'start_date', e.target.value)}
+                          className={inputClass}
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass}>End Date (optional)</label>
+                        <input
+                          type="date"
+                          value={item.end_date}
+                          onChange={(e) => updateMilestone(index, 'end_date', e.target.value)}
                           className={inputClass}
                         />
                       </div>
@@ -465,13 +596,15 @@ const DriverReferralSettings = () => {
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
-                        <label className={labelClass}>Minimum Trips / Week</label>
+                        <label className={labelClass}>Only These Drivers (optional)</label>
                         <input
-                          type="number"
-                          value={item.min_trips_per_week}
-                          onChange={(e) => updateMilestone(index, 'min_trips_per_week', e.target.value)}
+                          type="text"
+                          value={item.only_driver_phones}
+                          onChange={(e) => updateMilestone(index, 'only_driver_phones', e.target.value)}
                           className={inputClass}
+                          placeholder="9876543210, 9876543211"
                         />
+                        <p className="mt-1 text-[11px] text-gray-400">Phone numbers, separated by commas. Use this to test with one driver. Empty = all approved drivers.</p>
                       </div>
                       <div>
                         <label className={labelClass}>Admin Note</label>
@@ -480,10 +613,14 @@ const DriverReferralSettings = () => {
                           value={item.notes}
                           onChange={(e) => updateMilestone(index, 'notes', e.target.value)}
                           className={inputClass}
-                          placeholder="Credit after compliance review"
+                          placeholder="Agreed with the client on 5 Nov"
                         />
                       </div>
                     </div>
+
+                    <p className="rounded-lg bg-yellow-50 border border-yellow-100 px-4 py-3 text-xs font-medium text-gray-800">
+                      {describeMilestone(item)}
+                    </p>
                   </div>
                 ))}
 
@@ -496,6 +633,60 @@ const DriverReferralSettings = () => {
                   Add Milestone
                 </button>
               </div>
+
+              {payouts ? (
+                <div className="border-t border-gray-200 p-6 space-y-4">
+                  <h4 className="text-sm font-bold text-gray-900">Milestone payments</h4>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                    <div className="rounded-xl border border-gray-200 p-4">
+                      <p className="text-xs text-gray-500">Today</p>
+                      <p className="mt-1 text-lg font-bold text-gray-900">₹{payouts.summary?.todayAmount || 0}</p>
+                      <p className="text-xs text-gray-500">{payouts.summary?.todayCount || 0} payments</p>
+                    </div>
+                    <div className="rounded-xl border border-gray-200 p-4">
+                      <p className="text-xs text-gray-500">This month</p>
+                      <p className="mt-1 text-lg font-bold text-gray-900">₹{payouts.summary?.monthAmount || 0}</p>
+                      <p className="text-xs text-gray-500">{payouts.summary?.monthCount || 0} payments</p>
+                    </div>
+                    <div className={`rounded-xl border p-4 ${payouts.summary?.needsChecking ? 'border-rose-200 bg-rose-50' : 'border-gray-200'}`}>
+                      <p className="text-xs text-gray-500">Needs checking</p>
+                      <p className="mt-1 text-lg font-bold text-gray-900">{payouts.summary?.needsChecking || 0}</p>
+                      <p className="text-xs text-gray-500">Not retried by itself. Check the driver's wallet before paying by hand.</p>
+                    </div>
+                  </div>
+
+                  {payouts.results?.length ? (
+                    <div className="overflow-x-auto rounded-xl border border-gray-200">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-gray-50 text-gray-500">
+                          <tr>
+                            <th className="px-4 py-2 font-semibold">Driver</th>
+                            <th className="px-4 py-2 font-semibold">Milestone</th>
+                            <th className="px-4 py-2 font-semibold">Day</th>
+                            <th className="px-4 py-2 font-semibold">Online</th>
+                            <th className="px-4 py-2 font-semibold">Amount</th>
+                            <th className="px-4 py-2 font-semibold">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {payouts.results.map((row) => (
+                            <tr key={row.id}>
+                              <td className="px-4 py-2 text-gray-900">{row.driverName || 'Unknown'} <span className="text-gray-500">{row.driverPhone}</span></td>
+                              <td className="px-4 py-2 text-gray-700">{row.milestoneName}</td>
+                              <td className="px-4 py-2 tabular-nums text-gray-700">{row.day}</td>
+                              <td className="px-4 py-2 tabular-nums text-gray-700">{Math.floor(row.onlineMinutes / 60)}h {row.onlineMinutes % 60}m</td>
+                              <td className="px-4 py-2 tabular-nums font-semibold text-gray-900">₹{row.amount}</td>
+                              <td className={`px-4 py-2 font-semibold ${row.status === 'paid' ? 'text-emerald-700' : 'text-rose-600'}`}>{row.status}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-gray-500">No milestone payments yet.</p>
+                  )}
+                </div>
+              ) : null}
             </div>
 
             <div className="rounded-2xl border border-gray-200 overflow-hidden">
