@@ -6793,10 +6793,7 @@ export const listPublicVehicleCatalog = async () => {
     map_icon: item.map_icon || item.icon || item.image || '',
     status: item.status ?? 1,
     active: item.active !== false && Number(item.status ?? 1) !== 0,
-  }))
-    // Riders only ever see vehicles an admin has switched on. The app showed every
-    // type it was sent, so switched-off ones appeared with a borrowed fare.
-    .filter((item) => item.active);
+  }));
 
   const payload = {
     results,
@@ -6817,6 +6814,28 @@ export const listPublicVehicleCatalog = async () => {
   };
 
   return payload;
+};
+
+/**
+ * What a rider can book: only vehicles an admin has switched on. The rider app
+ * showed every type it was sent, so switched-off ones appeared with a fare
+ * borrowed from another vehicle. The map icons keep using the full list, since a
+ * driver can still be on a type that has since been switched off.
+ */
+export const listBookableVehicleCatalog = async () => {
+  const catalog = await listPublicVehicleCatalog();
+  const results = catalog.results.filter((item) => item.active);
+  return {
+    results,
+    paginator: {
+      ...catalog.paginator,
+      data: results,
+      total: results.length,
+      per_page: results.length,
+      from: results.length ? 1 : 0,
+      to: results.length,
+    },
+  };
 };
 
 export const listPublicRentalVehicleCatalog = async () => {
