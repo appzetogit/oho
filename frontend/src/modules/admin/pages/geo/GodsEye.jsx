@@ -102,6 +102,18 @@ const GodsEye = () => {
   // Selection
   const [selectedDriver, setSelectedDriver] = useState(null);
 
+  // The vehicle types configured in the admin panel, so the filter always
+  // matches what exists instead of a fixed Car/Bike/Auto list.
+  const [vehicleTypes, setVehicleTypes] = useState([]);
+  useEffect(() => {
+    adminService.getVehicleTypes()
+      .then((res) => {
+        const list = res?.data?.results || res?.results || res?.data || [];
+        setVehicleTypes(Array.isArray(list) ? list : []);
+      })
+      .catch(() => setVehicleTypes([]));
+  }, []);
+
   // Fetch Logic
   const fetchMapData = useCallback(async () => {
     setLoading(true);
@@ -190,8 +202,15 @@ const GodsEye = () => {
 
       // Vehicle Type
       if (filters.vehicleType !== 'all') {
-        const vt = String(d.vehicle_icon_type || d.vehicle_type || d.transport_type || '').toLowerCase();
-        if (!vt.includes(filters.vehicleType)) return false;
+        // Match on the vehicle type id; fall back to the name for drivers
+        // registered before ids were stored.
+        const selected = vehicleTypes.find((vt) => String(vt._id || vt.id) === filters.vehicleType);
+        const driverTypeId = String(d.vehicle_type_id?._id || d.vehicle_type_id || '');
+        const driverTypeName = String(d.vehicle_type || d.vehicle_icon_type || '').trim().toLowerCase();
+        const matches = driverTypeId
+          ? driverTypeId === filters.vehicleType
+          : Boolean(selected) && driverTypeName === String(selected.name || '').trim().toLowerCase();
+        if (!matches) return false;
       }
 
       // Service Type, City, Zone (Assuming fields exist, simplified matching)
@@ -200,7 +219,7 @@ const GodsEye = () => {
 
       return true;
     });
-  }, [drivers, filters, searchQuery]);
+  }, [drivers, filters, searchQuery, vehicleTypes]);
 
   // The zones drivers are actually assigned to, so the picker never offers a
   // zone with nobody in it.
@@ -347,9 +366,11 @@ const GodsEye = () => {
                     className="w-full bg-gray-50 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-black outline-none focus:border-yellow-400"
                   >
                      <option value="all">All Types</option>
-                     <option value="car">Car (Taxi)</option>
-                     <option value="bike">Bike</option>
-                     <option value="auto">Auto</option>
+                     {vehicleTypes.map((vt) => (
+                       <option key={vt._id || vt.id} value={String(vt._id || vt.id)}>
+                         {vt.name}{vt.active === false || Number(vt.status ?? 1) === 0 ? ' (off)' : ''}
+                       </option>
+                     ))}
                   </select>
                </div>
 
