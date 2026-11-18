@@ -1456,12 +1456,12 @@ const scheduleNextAttempt = (rideId, nextAttemptIndex, retryDelayMs) => {
   saveDispatchState(rideId, { timer });
 };
 
-const getAttemptRadiusMeters = (baseDistanceMeters, attemptIndex) => {
-  const safeBaseDistance = Math.max(1000, Number(baseDistanceMeters) || 0);
-  const growthMultiplier = Math.min(1 + (Math.max(0, attemptIndex) * 0.5), 3);
-
-  return Math.round(safeBaseDistance * growthMultiplier);
-};
+// The admin's "Driver Search Radius" is a hard limit. Retries used to widen the
+// circle by half each time, up to three times the setting, so a 3 km setting
+// reached drivers 9 km away. Every attempt now searches the same radius.
+// eslint-disable-next-line no-unused-vars
+const getAttemptRadiusMeters = (baseDistanceMeters, _attemptIndex) =>
+  Math.round(Math.max(1000, Number(baseDistanceMeters) || 0));
 
 const dispatchAttempt = async (rideId, attemptIndex = 0) => {
   const ownsDispatch = await ensureDispatchLease(rideId);
