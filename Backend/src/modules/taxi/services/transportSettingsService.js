@@ -100,7 +100,7 @@ export const resolveTransportDispatchConfig = async () => {
   const settings = await getTransportRideSettings();
   const driverSearchRadiusKm = toPositiveNumber(
     settings.driver_search_radius,
-    toPositiveNumber(defaultTransportRideSettings.driver_search_radius, 5),
+    toPositiveNumber(defaultTransportRideSettings.driver_search_radius, 2),
   );
   const retryWindowSeconds = toPositiveNumber(
     settings.trip_accept_reject_duration_for_driver,
