@@ -249,9 +249,11 @@ const matchDispatchDrivers = async ({
   ride,
   radius,
   dispatchVehicleTypeIds,
+  excludeDriverIds = [],
 }) => {
   const sharedOptions = {
     maxDistance: radius,
+    excludeDriverIds,
     vehicleTypeId: ride.vehicleTypeId,
     vehicleTypeIds: dispatchVehicleTypeIds,
   };
@@ -651,6 +653,17 @@ const persistDispatchTrackingProgress = async ({
     };
   }
 
+  if (reset) {
+    const before = await Ride.findOneAndUpdate({ _id: rideId }, update, {
+      returnDocument: 'before',
+      projection: { dispatchTracking: 1 },
+    }).lean();
+    return {
+      notifiedDriverIds: normalizeDispatchDriverIds(before?.dispatchTracking?.notifiedDriverIds),
+      rejectedDriverIds: normalizeDispatchDriverIds(before?.dispatchTracking?.rejectedDriverIds),
+    };
+  }
+
   await Ride.updateOne({ _id: rideId }, update);
 };
 
@@ -723,7 +736,11 @@ export const restartRideDispatchWithLatestFare = async (rideId) => {
     ...state.rejectedDriverIds,
   ]);
   stopDispatchFlow(rideId, { releaseLease: false });
-  await persistDispatchTrackingProgress({ rideId, reset: true }).catch(() => null);
+  // Offers may have gone out from the other API worker; close those cards too.
+  const persistedTracking = await persistDispatchTrackingProgress({ rideId, reset: true }).catch(() => null);
+  const alreadyClosed = new Set([...state.driverIds, ...state.notifiedDriverIds, ...state.rejectedDriverIds].map(String));
+  const missedDriverIds = (persistedTracking?.notifiedDriverIds || []).filter((id) => !alreadyClosed.has(String(id)));
+  if (missedDriverIds.length) closeDriverRequestWindow(rideId, missedDriverIds);
 
   const ride = await Ride.findById(rideId).populate('userId', 'name phone countryCode');
   if (!ride || ride.status !== RIDE_STATUS.SEARCHING || ride.liveStatus !== RIDE_LIVE_STATUS.SEARCHING) {
@@ -756,6 +773,34 @@ const saveDispatchState = (rideId, nextState = {}) => {
   });
 
   return activeDispatches.get(rideKey);
+};
+
+/** Adds drivers recorded on the ride (by any worker) to a local dispatch state. */
+const mergePersistedNotifiedDrivers = (state, persisted) => {
+  if (!state || !persisted?.notifiedDriverIds?.length) return state;
+  state.notifiedDriverIds = normalizeDispatchDriverIds([
+    ...(state.notifiedDriverIds || []),
+    ...persisted.notifiedDriverIds,
+  ]);
+  return state;
+};
+
+/**
+ * Marks a driver free after one of their rides ends, unless another of their
+ * rides is already under way. Cancelling tomorrow's booking used to free a
+ * driver who was in the middle of a trip today.
+ */
+const releaseDriverUnlessBusyElsewhere = async (driverId, endedRideId) => {
+  if (!driverId) return;
+  const otherTrip = await Ride.exists({
+    _id: { $ne: endedRideId },
+    driverId,
+    status: { $in: [RIDE_STATUS.ACCEPTED, RIDE_STATUS.ONGOING] },
+    $or: [{ scheduledAt: null }, { scheduledAt: { $lte: new Date() } }],
+  });
+  if (!otherTrip) {
+    await Driver.findByIdAndUpdate(driverId, { isOnRide: false });
+  }
 };
 
 const hasLocalDispatchFlow = (rideId) => {
@@ -1011,7 +1056,8 @@ const closeRideAsUnmatched = async (rideId) => {
   }
 
   await User.findByIdAndUpdate(ride.userId, { currentRideId: null });
-  await persistDispatchTrackingProgress({ rideId, reset: true }).catch(() => null);
+  // Offers may have gone out from the other API worker; its list is on the ride.
+  mergePersistedNotifiedDrivers(dispatchState, await persistDispatchTrackingProgress({ rideId, reset: true }).catch(() => null));
 
   emitToRoom(getUserRoom(ride.userId), 'rideCancelled', {
     rideId: String(ride._id),
@@ -1067,9 +1113,13 @@ export const cancelRideByAdmin = async (rideId) => {
 
   await Promise.all([
     User.findByIdAndUpdate(ride.userId, { currentRideId: null }),
-    ride.driverId ? Driver.findByIdAndUpdate(ride.driverId, { isOnRide: false }) : Promise.resolve(),
+    ride.driverId ? releaseDriverUnlessBusyElsewhere(ride.driverId, ride._id) : Promise.resolve(),
   ]);
-  await persistDispatchTrackingProgress({ rideId, reset: true }).catch(() => null);
+  // Close the offer card for every driver it went to, on either worker.
+  const persistedTracking = await persistDispatchTrackingProgress({ rideId, reset: true }).catch(() => null);
+  if (persistedTracking?.notifiedDriverIds?.length) {
+    closeDriverRequestWindow(rideId, persistedTracking.notifiedDriverIds.filter((id) => String(id) !== String(ride.driverId || '')));
+  }
 
   emitToRoom(getUserRoom(ride.userId), 'rideCancelled', {
     rideId: String(ride._id),
@@ -1193,10 +1243,11 @@ export const cancelRideByUser = async ({ rideId, userId, reason = '', reasonId =
       })
       : Promise.resolve(),
     User.findByIdAndUpdate(ride.userId, { currentRideId: null }),
-    ride.driverId ? Driver.findByIdAndUpdate(ride.driverId, { isOnRide: false }) : Promise.resolve(),
+    ride.driverId ? releaseDriverUnlessBusyElsewhere(ride.driverId, ride._id) : Promise.resolve(),
   ]);
 
-  await persistDispatchTrackingProgress({ rideId, reset: true }).catch(() => null);
+  // Offers may have gone out from the other API worker; its list is on the ride.
+  mergePersistedNotifiedDrivers(dispatchState, await persistDispatchTrackingProgress({ rideId, reset: true }).catch(() => null));
 
   emitToRoom(getUserRoom(ride.userId), 'rideCancelled', {
     rideId: String(ride._id),
@@ -1365,10 +1416,11 @@ export const cancelRideByDriver = async ({ rideId, driverId, reason = '', reason
       })
       : Promise.resolve(),
     User.findByIdAndUpdate(ride.userId, { currentRideId: null }),
-    ride.driverId ? Driver.findByIdAndUpdate(ride.driverId, { isOnRide: false }) : Promise.resolve(),
+    ride.driverId ? releaseDriverUnlessBusyElsewhere(ride.driverId, ride._id) : Promise.resolve(),
   ]);
 
-  await persistDispatchTrackingProgress({ rideId, reset: true }).catch(() => null);
+  // Offers may have gone out from the other API worker; its list is on the ride.
+  mergePersistedNotifiedDrivers(dispatchState, await persistDispatchTrackingProgress({ rideId, reset: true }).catch(() => null));
 
   const cancelReason = isUpcomingScheduledRide
     ? 'Your scheduled ride was cancelled by the driver.'
@@ -1493,6 +1545,7 @@ const dispatchAttempt = async (rideId, attemptIndex = 0) => {
       ride,
       radius,
       dispatchVehicleTypeIds,
+      excludeDriverIds: [...dispatchState.notifiedDriverIds, ...dispatchState.rejectedDriverIds],
     });
     const effectiveRadius = Number.isFinite(searchRadiusMeters) && searchRadiusMeters > 0
       ? searchRadiusMeters
@@ -1665,7 +1718,8 @@ export const notifyLateAvailableDriver = async (driverId) => {
     const driver = await Driver.findById(driverId)
       .select('_id isOnline isOnRide wallet location zoneId vehicleTypeId vehicleType vehicleIconType');
 
-    if (!driver?.isOnline || driver?.isOnRide || driver?.wallet?.isBlocked || !driver?.location?.coordinates?.length) {
+    // The wallet rule is applied by matching below, against the live minimum.
+    if (!driver?.isOnline || driver?.isOnRide || !driver?.location?.coordinates?.length) {
       return;
     }
 
@@ -1685,6 +1739,12 @@ export const notifyLateAvailableDriver = async (driverId) => {
         dispatchState.notifiedDriverIds.includes(driverKey) ||
         dispatchState.rejectedDriverIds.includes(driverKey)
       ) {
+        continue;
+      }
+
+      // One by one means one driver holds the offer at a time. Offering it to
+      // whoever sends GPS next turned "one by one" into a broadcast.
+      if (dispatchConfig.dispatchType !== 'broadcast' && dispatchState.driverIds.length) {
         continue;
       }
 
@@ -1720,6 +1780,9 @@ export const notifyLateAvailableDriver = async (driverId) => {
         driverIds: nextDriverIds,
         notifiedDriverIds: nextNotifiedDriverIds,
       });
+      // Saved on the ride too, so the other worker can close this offer when the
+      // ride is accepted or cancelled there.
+      await persistDispatchTrackingProgress({ rideId, notifiedDriverIds: [driverKey] }).catch(() => null);
 
       await emitRideRequestToDrivers({
         ride,
@@ -1743,7 +1806,8 @@ export const notifyLateAvailableDriver = async (driverId) => {
 export const notifyRideAccepted = async (ride) => {
   const state = getDispatchState(ride._id);
   stopDispatchFlow(ride._id);
-  await persistDispatchTrackingProgress({ rideId: ride._id, reset: true }).catch(() => null);
+  // Offers may have gone out from the other API worker; its list is on the ride.
+  mergePersistedNotifiedDrivers(state, await persistDispatchTrackingProgress({ rideId: ride._id, reset: true }).catch(() => null));
 
   // Once one driver wins the race, the rider is updated and the rest are told to stop.
   const populatedRide = await Ride.findById(ride._id).populate(

@@ -161,6 +161,19 @@ const resolveWalletRules = async () => {
   };
 };
 
+/**
+ * The live rule for taking orders, for matching drivers. wallet.isBlocked on the
+ * driver is only recalculated when the wallet moves, so after an admin changes
+ * the minimum it can be wrong for days; compare the balance to this instead.
+ */
+export const getDriverOrderWalletRule = async () => {
+  const rules = await resolveWalletRules();
+  return {
+    isWalletEnabled: rules.isWalletEnabled,
+    minimumBalanceForOrders: rules.minimumBalanceForOrders,
+  };
+};
+
 const getWalletSnapshot = async (driver) => {
   const rules = await resolveWalletRules();
   const balance = Number(driver?.wallet?.balance || 0);
@@ -204,7 +217,7 @@ export const ensureDriverWalletCanAcceptRide = async (driverOrId, { session } = 
 
   const wallet = await getWalletSnapshot(driver);
   const isBelowMinimumBalance = wallet.balance < wallet.minimumBalanceForOrders;
-  const isBlocked = wallet.isBlocked || !wallet.rules.isWalletEnabled || isBelowMinimumBalance;
+  const isBlocked = !wallet.rules.isWalletEnabled || isBelowMinimumBalance;
 
   if (isBlocked) {
     await Driver.findByIdAndUpdate(driver._id, {

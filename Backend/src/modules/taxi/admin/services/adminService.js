@@ -5426,6 +5426,10 @@ export const updateDriver = async (id, payload, currentAdmin = null) => {
 
   if ('approve' in payload) {
     update.approve = Boolean(payload.approve);
+    // Taking approval away also takes the driver offline, so offers stop now.
+    if (!update.approve) {
+      update.isOnline = false;
+    }
   }
 
   if (payload.status !== undefined) {

@@ -5,6 +5,8 @@ import { Vehicle } from '../admin/models/Vehicle.js';
 import { Driver } from '../driver/models/Driver.js';
 import { Zone } from '../driver/models/Zone.js';
 import { getDriverIdsBlockedByUpcomingScheduledRides } from './rideService.js';
+import { getDriverOrderWalletRule } from '../driver/services/walletService.js';
+import mongoose from 'mongoose';
 
 const EARTH_RADIUS_METERS = 6371000;
 
@@ -32,7 +34,7 @@ const normalizeVehicleTypeIds = (vehicleTypeIds = [], vehicleTypeId = null) => {
   return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
 };
 
-const buildDriverMatchFilters = ({ zoneId, serviceLocationId, vehicleTypeId, vehicleTypeIds, vehicleTypeKeys }) => {
+const buildDriverMatchFilters = ({ zoneId, serviceLocationId, vehicleTypeId, vehicleTypeIds, vehicleTypeKeys, walletRule }) => {
   const normalizedVehicleTypeIds = normalizeVehicleTypeIds(vehicleTypeIds, vehicleTypeId);
   const normalizedVehicleTypeKeys = Array.isArray(vehicleTypeKeys)
     ? [...new Set(vehicleTypeKeys.map(normalizeVehicleKey).filter(Boolean))]
@@ -52,12 +54,27 @@ const buildDriverMatchFilters = ({ zoneId, serviceLocationId, vehicleTypeId, veh
       ? { $or: vehicleTypeClauses }
       : vehicleTypeClauses[0] || {};
 
+  // Fleet drivers are paid through their owner, so the wallet minimum doesn't
+  // apply to them (accepting skips it too). Everyone else must meet the live
+  // minimum; the stored isBlocked flag can be days out of date.
+  const minimum = Number(walletRule?.minimumBalanceForOrders ?? 0);
+  const walletClauses = walletRule?.isWalletEnabled === false
+    ? []
+    : [
+        { 'wallet.balance': { $gte: minimum } },
+        ...(minimum <= 0 ? [{ 'wallet.balance': { $exists: false } }] : []),
+      ];
+
   return {
     isOnline: true,
     isOnRide: false,
+    // Disapproved or deleted drivers must stop getting offers straight away,
+    // not when they next go offline.
+    approve: true,
+    deletedAt: null,
     $or: [
       { owner_id: { $ne: null } },
-      { 'wallet.isBlocked': { $ne: true } },
+      ...walletClauses,
     ],
     ...(zoneId ? { zoneId } : {}),
     ...(serviceLocationId ? { service_location_id: serviceLocationId } : {}),
@@ -292,13 +309,30 @@ const findDriversForZone = async ({
   normalizedVehicleTypeIds,
   vehicleTypeKeys,
   strictZoneOnly = false,
+  excludeDriverIds = [],
+  walletRule,
 }) => {
-  const commonFilters = buildDriverMatchFilters({
-    zoneId,
-    serviceLocationId,
-    vehicleTypeIds: normalizedVehicleTypeIds,
-    vehicleTypeKeys,
-  });
+  const commonFilters = {
+    ...buildDriverMatchFilters({
+      zoneId,
+      serviceLocationId,
+      vehicleTypeIds: normalizedVehicleTypeIds,
+      vehicleTypeKeys,
+      walletRule,
+    }),
+    // Drivers already offered this ride, or who turned it down, are left out
+    // before the nearest-N limit. Filtering them afterwards meant every retry
+    // got the same few drivers back and nobody further away was ever tried.
+    ...(excludeDriverIds.length
+      ? {
+          _id: {
+            $nin: excludeDriverIds
+              .filter((id) => mongoose.Types.ObjectId.isValid(String(id)))
+              .map((id) => new mongoose.Types.ObjectId(String(id))),
+          },
+        }
+      : {}),
+  };
   const selectedFields =
     'name phone socketId vehicleTypeId vehicleType vehicleIconType vehicleNumber vehicleColor vehicleMake vehicleModel rating location zoneId service_location_id isOnline isOnRide routeBooking';
 
@@ -339,7 +373,9 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
     serviceLocationId = null,
     allowCrossZoneFallback = true,
     strictZoneOnly = false,
+    excludeDriverIds = [],
   } = options;
+  const walletRule = await getDriverOrderWalletRule();
   const normalizedVehicleTypeIds = normalizeVehicleTypeIds(vehicleTypeIds, vehicleTypeId);
   const allowedVehicles = normalizedVehicleTypeIds.length
     ? await Vehicle.find({ _id: { $in: normalizedVehicleTypeIds } }).select('name vehicle_type icon_types').lean()
@@ -348,9 +384,11 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
 
   const zone = await findZoneByPickup(coordinates, { serviceLocationId });
   const zoneBoundaryCapMeters = zone ? getZoneBoundaryCapMeters(zone, coordinates) : null;
-  const effectiveMaxDistance = Number.isFinite(zoneBoundaryCapMeters) && zoneBoundaryCapMeters >= 0
-    ? Math.min(Math.max(1, Math.round(maxDistance)), Math.max(1, zoneBoundaryCapMeters))
-    : Math.max(1, Math.round(maxDistance));
+  // The admin's radius as set. It used to be cut down to the distance from the
+  // pickup to the zone's edge, so a pickup 300 m inside the boundary searched
+  // only 300 m even with 5 km set. Drivers outside the zone are still excluded
+  // by the zone check below.
+  const effectiveMaxDistance = Math.max(1, Math.round(maxDistance));
 
   let drivers = await findDriversForZone({
     zoneId: zone?._id || null,
@@ -361,6 +399,8 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
     normalizedVehicleTypeIds,
     vehicleTypeKeys,
     strictZoneOnly,
+    excludeDriverIds,
+    walletRule,
   });
   drivers = filterDriversForMatchedZone({
     drivers,
@@ -384,6 +424,8 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
       normalizedVehicleTypeIds,
       vehicleTypeKeys,
       strictZoneOnly,
+      excludeDriverIds,
+      walletRule,
     });
     drivers = filterDriversForMatchedZone({
       drivers,

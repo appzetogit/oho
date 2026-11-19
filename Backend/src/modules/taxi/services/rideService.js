@@ -1615,7 +1615,11 @@ export const acceptRideAssignment = async ({ rideId, driverId }) => {
     _id: driverId,
     isOnline: true,
     isOnRide: false,
-    'wallet.isBlocked': { $ne: true },
+    // Matching only offers rides to approved drivers; accepting must agree. The
+    // wallet is checked just below against the live minimum, not the stored
+    // flag, which can be out of date.
+    approve: true,
+    deletedAt: null,
     ...driverVehicleFilter,
   };
 
@@ -1639,7 +1643,10 @@ export const acceptRideAssignment = async ({ rideId, driverId }) => {
     throw new ApiError(409, 'Driver already has another scheduled trip in a similar time range');
   }
 
-  await ensureDriverWalletCanAcceptRide(driver);
+  // Fleet drivers are paid through their owner, as at go-online and in matching.
+  if (!driver.owner_id) {
+    await ensureDriverWalletCanAcceptRide(driver);
+  }
 
   // A trip booked for later does not occupy the driver now — they keep taking
   // rides until it is due.
@@ -1758,6 +1765,12 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
 
   if (nextStatus === RIDE_LIVE_STATUS.STARTED && !ride.startedAt) {
     ride.startedAt = new Date();
+  }
+
+  // A scheduled trip is accepted without occupying the driver; once it starts
+  // they are busy, or they'd keep getting offers mid-trip.
+  if (nextStatus === RIDE_LIVE_STATUS.STARTED) {
+    await Driver.updateOne({ _id: ride.driverId }, { $set: { isOnRide: true } });
   }
 
   if (paymentMethod !== undefined && paymentMethod !== null && String(paymentMethod).trim()) {
@@ -2224,7 +2237,11 @@ export const acceptRideBidAssignment = async ({ rideId, bidId, userId }) => {
     _id: bid.driverId,
     isOnline: true,
     isOnRide: false,
-    'wallet.isBlocked': { $ne: true },
+    // Matching only offers rides to approved drivers; accepting must agree. The
+    // wallet is checked just below against the live minimum, not the stored
+    // flag, which can be out of date.
+    approve: true,
+    deletedAt: null,
     ...driverVehicleFilter,
   };
 
@@ -2247,7 +2264,10 @@ export const acceptRideBidAssignment = async ({ rideId, bidId, userId }) => {
     throw new ApiError(409, 'Driver already has another scheduled trip in a similar time range');
   }
 
-  await ensureDriverWalletCanAcceptRide(driver);
+  // Fleet drivers are paid through their owner, as at go-online and in matching.
+  if (!driver.owner_id) {
+    await ensureDriverWalletCanAcceptRide(driver);
+  }
 
   // A trip booked for later does not occupy the driver now.
   const occupyDriver = !isRideScheduledForFuture(ride);
