@@ -229,7 +229,10 @@ const findDriverByReferralCode = async (referralCode) => {
     return null;
   }
 
-  return Driver.findOne({ referralCode: normalizedCode });
+  // Case-insensitive, whole-code match, like the rider lookup: an exact match
+  // against an upper-cased code misses any stored code with lower-case letters.
+  const escaped = normalizedCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return Driver.findOne({ referralCode: { $regex: `^${escaped}$`, $options: 'i' } });
 };
 
 const creditDriverWalletByReference = async ({ driverId, amount, title, referenceKey, metadata = {} }) => {

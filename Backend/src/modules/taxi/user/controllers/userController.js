@@ -1554,7 +1554,12 @@ const findUserByReferralCode = async (referralCode) => {
     return null;
   }
 
-  return User.findOne({ referralCode: normalizedCode, deletedAt: null });
+  // Case-insensitive, whole-code match. The code is upper-cased on the way in,
+  // but about a third of riders (older accounts) have codes with lower-case
+  // letters, which an exact match never found: on 21 Nov roughly 30% of
+  // signups failed with "Invalid referral code" for a code typed correctly.
+  const escaped = normalizedCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return User.findOne({ referralCode: { $regex: `^${escaped}$`, $options: 'i' }, deletedAt: null });
 };
 
 /**
