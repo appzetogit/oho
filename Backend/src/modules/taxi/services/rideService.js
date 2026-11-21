@@ -23,7 +23,7 @@ import { getTipSettings } from './appSettingsService.js';
 import { getBidRideSettings } from './transportSettingsService.js';
 import { notifyRideLifecycle } from './rideNotificationService.js';
 import { resolveServerCheckedFare } from './fareGuardService.js';
-import { correctCompletedTripFare, odometerStepMeters } from './fareGuardRules.js';
+import { correctCompletedTripFare, isRoundTripIntercity, odometerStepMeters } from './fareGuardRules.js';
 
 const clearUserActiveRideIfPresent = async (user) => {
   if (!user?.currentRideId) {
@@ -885,6 +885,7 @@ export const createRideRecord = async ({
   dropCoords,
   pickupAddress,
   dropAddress,
+  stops,
   fare,
   estimatedDistanceMeters,
   estimatedDurationMinutes,
@@ -966,6 +967,8 @@ export const createRideRecord = async ({
       rule: pricingRule,
       pickupCoords,
       dropCoords,
+      stops,
+      roundTrip: isRoundTripIntercity(intercity),
       clientFare: safeFare,
       clientDistanceMeters: safeEstimatedDistanceMeters,
       clientDurationMinutes: safeEstimatedDurationMinutes,

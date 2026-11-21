@@ -1,6 +1,6 @@
 import { resolveRoute } from './routingService.js';
 import { getActivePriceHikeMultiplier } from './priceHikeService.js';
-import { applyHike, priceBookingFare } from './fareGuardRules.js';
+import { applyHike, priceBookingFare, stopsToWaypoints } from './fareGuardRules.js';
 
 /** The road lookup may not hold up a booking for longer than this. */
 const ROUTE_LOOKUP_BUDGET_MS = 3500;
@@ -22,6 +22,8 @@ export const resolveServerCheckedFare = async ({
   rule,
   pickupCoords,
   dropCoords,
+  stops,
+  roundTrip = false,
   clientFare,
   clientDistanceMeters,
   clientDurationMinutes,
@@ -34,7 +36,11 @@ export const resolveServerCheckedFare = async ({
     const [route, multiplier] = await Promise.all([
       haveCoords
         ? withBudget(
-            resolveRoute({ origin: `${pickupLat},${pickupLng}`, destination: `${dropLat},${dropLng}` }),
+            resolveRoute({
+              origin: `${pickupLat},${pickupLng}`,
+              destination: `${dropLat},${dropLng}`,
+              waypoints: stopsToWaypoints(stops),
+            }),
             ROUTE_LOOKUP_BUDGET_MS,
           )
         : null,
@@ -46,6 +52,7 @@ export const resolveServerCheckedFare = async ({
       clientDistanceMeters,
       clientDurationMinutes,
       roadDistanceMeters: route?.distanceMeters,
+      roundTrip,
     });
     if (!priced) return null;
 
@@ -56,6 +63,7 @@ export const resolveServerCheckedFare = async ({
         appMeters: Math.round(Number(clientDistanceMeters) || 0),
         meters: priced.distanceMeters,
         source: priced.source,
+        roundTrip,
         hike: multiplier,
       });
     }

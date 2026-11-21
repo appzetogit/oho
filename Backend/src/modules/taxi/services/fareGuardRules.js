@@ -89,33 +89,55 @@ export const applyHike = (rule, multiplier) => {
   };
 };
 
+/** A city ride booked as a round trip (the app sends intercity.tripType). */
+export const isRoundTripIntercity = (intercity) =>
+  String(intercity?.tripType || '').trim().toLowerCase() === 'round_trip';
+
+/** Stops the app sent, as routing waypoints ("lat,lng|lat,lng"), or ''. */
+export const stopsToWaypoints = (stops) => {
+  if (!Array.isArray(stops)) return '';
+  return stops
+    .map((stop) => [num(stop?.lat, NaN), num(stop?.lng, NaN)])
+    .filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng)
+      && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180)
+    .slice(0, 8)
+    .map(([lat, lng]) => `${lat},${lng}`)
+    .join('|');
+};
+
 /**
  * The booking fare: exactly the price list for the distance.
  *
- * Uses the road distance when the route lookup answered, otherwise the distance
- * the app measured. Minutes follow the app's pace (about 2.4 min/km) over that
- * distance, as the app does. Returns null only when the ride cannot be priced
- * (no usable price row, no distance); the app's fare is then kept.
+ * Distance is the road route (through any stops) or, when that is unavailable
+ * or shorter, the distance the app measured through its stops: the road is
+ * never shorter than the straight lines between the same points, so the longer
+ * of the two is the better measure. Minutes follow the app's pace (about 2.4
+ * min/km). A round trip charges both legs, the base fare once, as the app does.
+ * Returns null only when the ride cannot be priced (no usable price row, no
+ * distance); the app's fare is then kept.
  */
 export const priceBookingFare = ({
   rule,
   clientDistanceMeters,
   clientDurationMinutes,
   roadDistanceMeters,
+  roundTrip = false,
 }) => {
   if (!isDistancePricingRule(rule)) return null;
 
   const appDistance = Math.max(0, num(clientDistanceMeters));
   const road = num(roadDistanceMeters, NaN);
-  const usedRoad = Number.isFinite(road) && road > 0;
+  const usedRoad = Number.isFinite(road) && road > 0 && road >= appDistance;
   const distance = usedRoad ? road : appDistance;
   if (!(distance > 0)) return null;
 
   const pace = minutesPerKmFrom(appDistance, clientDurationMinutes);
   const minutes = (distance / 1000) * pace;
-  const fare = computeListFare(rule, distance, minutes);
+  const legs = roundTrip ? 2 : 1;
+  const fare = computeListFare(rule, distance * legs, minutes * legs);
   if (!(fare > 0)) return null;
 
+  // Stored one way, as the app sends it: drivers and history show the route.
   return {
     fare,
     distanceMeters: Math.round(distance),
@@ -161,15 +183,17 @@ export const correctCompletedTripFare = ({ ride, rule }) => {
   if (String(ride.promo?.code || '').trim() || num(ride.promo?.discount_amount) > 0) return null;
   if (ride.subscriptionUsage?.covered) return null;
 
+  // A round trip is booked one way but driven both ways.
+  const legs = isRoundTripIntercity(ride.intercity) ? 2 : 1;
   const fare = num(ride.fare, NaN);
-  const booked = Math.max(0, num(ride.estimatedDistanceMeters));
+  const booked = Math.max(0, num(ride.estimatedDistanceMeters)) * legs;
   const tracked = Math.max(0, num(ride.tripDistanceMeters));
   if (!Number.isFinite(fare) || tracked <= 0) return null;
   if (tracked < booked + TRIP_MIN_EXTRA_METERS || tracked < booked * TRIP_MIN_RATIO) return null;
 
   const hikedRule = applyHike(rule, ride.pricingSnapshot?.priceHikeMultiplier);
   const billable = Math.min(tracked, booked + TRIP_MAX_EXTRA_METERS);
-  const bookedMinutes = Math.max(0, num(ride.estimatedDurationMinutes));
+  const bookedMinutes = Math.max(0, num(ride.estimatedDurationMinutes)) * legs;
   const pace = minutesPerKmFrom(booked, bookedMinutes);
   const minutes = Math.max(bookedMinutes, (billable / 1000) * pace);
 

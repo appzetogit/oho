@@ -5,7 +5,9 @@ import {
   computeDistanceFare,
   computeListFare,
   correctCompletedTripFare,
+  isRoundTripIntercity,
   priceBookingFare,
+  stopsToWaypoints,
   odometerStepMeters,
 } from '../fareGuardRules.js';
 
@@ -33,8 +35,8 @@ test('booking: same distance gives the same fare the app shows', () => {
 
 test('booking: a fare the app sent too high or too low does not matter', () => {
   // The app's fare is not an input at all: only the price list and distance are.
-  const a = priceBookingFare({ rule: AUTO, clientDistanceMeters: 5000, clientDurationMinutes: 12, roadDistanceMeters: 4000 });
-  assert.equal(a.fare, computeListFare(AUTO, 4000, 4 * 2.4));
+  const a = priceBookingFare({ rule: AUTO, clientDistanceMeters: 5000, clientDurationMinutes: 12, roadDistanceMeters: 6000 });
+  assert.equal(a.fare, computeListFare(AUTO, 6000, 6 * 2.4));
 });
 
 test('booking: route lookup failed -> app distance, still priced from the list', () => {
@@ -104,4 +106,35 @@ test('odometer: ignores jitter and teleports, keeps real movement', () => {
   // ~2.2 km over 5 minutes of silence: kept.
   const gap = odometerStepMeters({ previousCoordinates: a, previousAt: t0, nextCoordinates: [86.9147, 21.5009], nextAt: '2026-11-21T05:05:00Z' });
   assert.ok(gap > 2000 && gap < 2300);
+});
+
+test('booking: a round trip charges both legs and the base fare once, as the app does', () => {
+  const one = priceBookingFare({ rule: AUTO, clientDistanceMeters: 5000, clientDurationMinutes: 12, roadDistanceMeters: 6000 });
+  const both = priceBookingFare({ rule: AUTO, clientDistanceMeters: 5000, clientDurationMinutes: 12, roadDistanceMeters: 6000, roundTrip: true });
+  // 50 + (12 - 3) km * 8 + 2 * (6 km * 2.4 min/km) * 2
+  assert.equal(both.fare, Math.round(50 + 9 * 8 + 12 * 2.4 * 2));
+  assert.ok(both.fare > one.fare);
+  assert.equal(both.distanceMeters, 6000);
+  assert.equal(isRoundTripIntercity({ tripType: 'round_trip' }), true);
+  assert.equal(isRoundTripIntercity({ tripType: 'one_way' }), false);
+  assert.equal(isRoundTripIntercity(undefined), false);
+});
+
+test('booking: a road route shorter than the app distance (unknown stops) uses the app distance', () => {
+  const result = priceBookingFare({ rule: AUTO, clientDistanceMeters: 9000, clientDurationMinutes: 21.6, roadDistanceMeters: 4000 });
+  assert.equal(result.source, 'app_distance');
+  assert.equal(result.distanceMeters, 9000);
+});
+
+test('stops become routing waypoints; junk is dropped', () => {
+  assert.equal(stopsToWaypoints([{ lat: 21.49, lng: 86.91 }, { lat: 'x', lng: 1 }, { lat: 21.5, lng: 86.92 }]), '21.49,86.91|21.5,86.92');
+  assert.equal(stopsToWaypoints(null), '');
+  assert.equal(stopsToWaypoints([{ lat: 200, lng: 1 }]), '');
+});
+
+test('trip: a round trip driven both ways is not charged extra', () => {
+  const ride = tripRide({ estimatedDistanceMeters: 5000, estimatedDurationMinutes: 12, tripDistanceMeters: 10500, intercity: { tripType: 'round_trip' } });
+  assert.equal(correctCompletedTripFare({ ride, rule: AUTO }), null);
+  const longer = tripRide({ estimatedDistanceMeters: 5000, estimatedDurationMinutes: 12, tripDistanceMeters: 16000, intercity: { tripType: 'round_trip' } });
+  assert.ok(correctCompletedTripFare({ ride: longer, rule: AUTO }).fare > longer.fare);
 });
