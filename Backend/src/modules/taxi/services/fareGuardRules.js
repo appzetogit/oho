@@ -207,3 +207,49 @@ export const correctCompletedTripFare = ({ ride, rule }) => {
     billedDurationMinutes: Number(minutes.toFixed(2)),
   };
 };
+
+/** Waiting at pickup: arrivals further than this from the pickup are not charged. */
+export const WAITING_MAX_ARRIVAL_DISTANCE_METERS = 500;
+/** Waiting at pickup: never more than this many billable minutes. */
+export const WAITING_MAX_BILLABLE_MINUTES = 30;
+
+/**
+ * Waiting charge at pickup, from the admin price row: every started minute
+ * between the driver's "arrived" tap and the trip start, after the free
+ * minutes (free_waiting_before), at waiting_charge per minute.
+ *
+ * Not charged when the driver tapped "arrived" more than 500 m from the
+ * pickup (a tap made on the way is not waiting), and capped at 30 billable
+ * minutes. Subscription-covered rides are left alone. Returns null when there
+ * is nothing to charge.
+ */
+export const computeWaitingCharge = ({ ride, rule }) => {
+  if (!ride || !rule) return null;
+  if (ride.subscriptionUsage?.covered) return null;
+
+  const rate = num(rule.waiting_charge);
+  if (!(rate > 0)) return null;
+
+  const arrivedAt = ride.arrivedAt ? new Date(ride.arrivedAt).getTime() : NaN;
+  const startedAt = ride.startedAt ? new Date(ride.startedAt).getTime() : NaN;
+  if (!Number.isFinite(arrivedAt) || !Number.isFinite(startedAt) || startedAt <= arrivedAt) return null;
+
+  const arrivalDistance = num(ride.arrivalDistanceMeters, NaN);
+  if (Number.isFinite(arrivalDistance) && arrivalDistance > WAITING_MAX_ARRIVAL_DISTANCE_METERS) return null;
+
+  const waitedMinutes = (startedAt - arrivedAt) / 60000;
+  const freeMinutes = Math.max(0, num(rule.free_waiting_before));
+  const billableMinutes = Math.min(
+    WAITING_MAX_BILLABLE_MINUTES,
+    Math.max(0, Math.ceil(waitedMinutes - freeMinutes)),
+  );
+  if (billableMinutes <= 0) return null;
+
+  return {
+    waitedMinutes: Number(waitedMinutes.toFixed(2)),
+    freeMinutes,
+    billableMinutes,
+    ratePerMinute: rate,
+    amount: Math.round(billableMinutes * rate * 100) / 100,
+  };
+};

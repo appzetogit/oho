@@ -23,7 +23,13 @@ import { getTipSettings } from './appSettingsService.js';
 import { getBidRideSettings } from './transportSettingsService.js';
 import { notifyRideLifecycle } from './rideNotificationService.js';
 import { resolveServerCheckedFare } from './fareGuardService.js';
-import { correctCompletedTripFare, isRoundTripIntercity, odometerStepMeters } from './fareGuardRules.js';
+import {
+  computeWaitingCharge,
+  correctCompletedTripFare,
+  haversineMeters,
+  isRoundTripIntercity,
+  odometerStepMeters,
+} from './fareGuardRules.js';
 
 const clearUserActiveRideIfPresent = async (user) => {
   if (!user?.currentRideId) {
@@ -1789,6 +1795,16 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
 
   if (nextStatus === RIDE_LIVE_STATUS.ARRIVING && !ride.arrivedAt) {
     ride.arrivedAt = new Date();
+
+    // How far from the pickup the driver was when they tapped "arrived", from
+    // their live location if it is recent. Waiting is only charged for an
+    // arrival at the pickup, not for a tap made on the way.
+    const fix = ride.lastDriverLocation;
+    const fixAgeMs = fix?.updatedAt ? Date.now() - new Date(fix.updatedAt).getTime() : Infinity;
+    const arrivalDistance = fixAgeMs <= 3 * 60 * 1000
+      ? haversineMeters(fix?.coordinates || [], ride.pickupLocation?.coordinates || [])
+      : null;
+    ride.arrivalDistanceMeters = arrivalDistance === null ? null : Math.round(arrivalDistance);
   }
 
   if (nextStatus === RIDE_LIVE_STATUS.STARTED && !ride.startedAt) {
@@ -1833,6 +1849,20 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
           trackedMeters: ride.tripDistanceMeters,
         });
         ride.fare = correction.fare;
+      }
+
+      // Waiting at pickup, from the admin price row, paid with the fare so it
+      // reaches the driver through the normal wallet settlement.
+      const waiting = computeWaitingCharge({ ride, rule });
+      if (waiting) {
+        ride.waitingCharge = { ...waiting, chargedAt: new Date() };
+        console.info('[fare-guard] waiting charge added', {
+          rideId: String(ride._id),
+          fare: ride.fare,
+          waiting: waiting.amount,
+          billableMinutes: waiting.billableMinutes,
+        });
+        ride.fare = Math.round((Number(ride.fare) + waiting.amount) * 100) / 100;
       }
     } catch (error) {
       console.warn('[fare-guard] trip repricing skipped:', error?.message || error);

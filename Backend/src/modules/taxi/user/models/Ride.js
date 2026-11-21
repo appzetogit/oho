@@ -341,6 +341,27 @@ const rideSchema = new mongoose.Schema(
       ),
       default: undefined,
     },
+    // Metres from the pickup when the driver tapped "arrived" (null when their
+    // live location was not recent). Waiting is not charged beyond 500 m.
+    arrivalDistanceMeters: {
+      type: Number,
+      default: null,
+    },
+    // Waiting charge at pickup added to the fare at completion, if any.
+    waitingCharge: {
+      type: new mongoose.Schema(
+        {
+          waitedMinutes: { type: Number, default: 0 },
+          freeMinutes: { type: Number, default: 0 },
+          billableMinutes: { type: Number, default: 0 },
+          ratePerMinute: { type: Number, default: 0 },
+          amount: { type: Number, default: 0 },
+          chargedAt: { type: Date, default: null },
+        },
+        { _id: false },
+      ),
+      default: undefined,
+    },
     paymentMethod: {
       type: String,
       enum: ['cash', 'online'],

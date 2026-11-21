@@ -4,6 +4,7 @@ import {
   applyHike,
   computeDistanceFare,
   computeListFare,
+  computeWaitingCharge,
   correctCompletedTripFare,
   isRoundTripIntercity,
   priceBookingFare,
@@ -137,4 +138,35 @@ test('trip: a round trip driven both ways is not charged extra', () => {
   assert.equal(correctCompletedTripFare({ ride, rule: AUTO }), null);
   const longer = tripRide({ estimatedDistanceMeters: 5000, estimatedDurationMinutes: 12, tripDistanceMeters: 16000, intercity: { tripType: 'round_trip' } });
   assert.ok(correctCompletedTripFare({ ride: longer, rule: AUTO }).fare > longer.fare);
+});
+
+const AUTO_WAIT = { waiting_charge: 1, free_waiting_before: 2 };
+const BIKE_WAIT = { waiting_charge: 2, free_waiting_before: 2 };
+const waited = (minutes, over = {}) => ({
+  arrivedAt: '2026-11-21T05:00:00Z',
+  startedAt: new Date(Date.parse('2026-11-21T05:00:00Z') + minutes * 60000).toISOString(),
+  ...over,
+});
+
+test('waiting: the real rides drivers were not paid for', () => {
+  assert.equal(computeWaitingCharge({ ride: waited(4.4), rule: BIKE_WAIT }).amount, 6);   // jayanta Das
+  assert.equal(computeWaitingCharge({ ride: waited(3.3), rule: AUTO_WAIT }).amount, 2);   // Ranjit Mohalik
+  assert.equal(computeWaitingCharge({ ride: waited(18.8), rule: AUTO_WAIT }).amount, 17); // Sapan Kumar Sena
+  assert.equal(computeWaitingCharge({ ride: waited(2.7), rule: BIKE_WAIT }).amount, 2);   // Abhisek Das
+  assert.equal(computeWaitingCharge({ ride: waited(4.1), rule: BIKE_WAIT }).amount, 6);   // Ritwik Panda
+});
+
+test('waiting: inside the free minutes, no rate, or no start is not charged', () => {
+  assert.equal(computeWaitingCharge({ ride: waited(1.9), rule: AUTO_WAIT }), null);
+  assert.equal(computeWaitingCharge({ ride: waited(10), rule: { waiting_charge: 0, free_waiting_before: 2 } }), null);
+  assert.equal(computeWaitingCharge({ ride: { arrivedAt: '2026-11-21T05:00:00Z', startedAt: null }, rule: AUTO_WAIT }), null);
+  assert.equal(computeWaitingCharge({ ride: waited(10), rule: null }), null);
+});
+
+test('waiting: arrival tapped far from pickup, subscription rides, and the 30 minute cap', () => {
+  assert.equal(computeWaitingCharge({ ride: waited(10, { arrivalDistanceMeters: 900 }), rule: AUTO_WAIT }), null);
+  assert.equal(computeWaitingCharge({ ride: waited(10, { arrivalDistanceMeters: 120 }), rule: AUTO_WAIT }).amount, 8);
+  assert.equal(computeWaitingCharge({ ride: waited(10, { arrivalDistanceMeters: null }), rule: AUTO_WAIT }).amount, 8);
+  assert.equal(computeWaitingCharge({ ride: waited(10, { subscriptionUsage: { covered: true } }), rule: AUTO_WAIT }), null);
+  assert.equal(computeWaitingCharge({ ride: waited(90), rule: AUTO_WAIT }).billableMinutes, 30);
 });
