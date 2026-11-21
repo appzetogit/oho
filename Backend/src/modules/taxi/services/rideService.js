@@ -22,6 +22,8 @@ import { reservePromoForRide } from './promoService.js';
 import { getTipSettings } from './appSettingsService.js';
 import { getBidRideSettings } from './transportSettingsService.js';
 import { notifyRideLifecycle } from './rideNotificationService.js';
+import { resolveServerCheckedFare } from './fareGuardService.js';
+import { correctCompletedTripFare, odometerStepMeters } from './fareGuardRules.js';
 
 const clearUserActiveRideIfPresent = async (user) => {
   if (!user?.currentRideId) {
@@ -911,9 +913,9 @@ export const createRideRecord = async ({
 
   await clearUserActiveRideIfPresent(user);
 
-  const safeFare = Number(fare);
-  const safeEstimatedDistanceMeters = Math.max(0, Number(estimatedDistanceMeters || 0));
-  const safeEstimatedDurationMinutes = Math.max(0, Number(estimatedDurationMinutes || 0));
+  let safeFare = Number(fare);
+  let safeEstimatedDistanceMeters = Math.max(0, Number(estimatedDistanceMeters || 0));
+  let safeEstimatedDurationMinutes = Math.max(0, Number(estimatedDurationMinutes || 0));
 
   if (!Number.isFinite(safeFare) || safeFare < 0) {
     throw new ApiError(400, 'fare must be a positive number or zero');
@@ -954,6 +956,26 @@ export const createRideRecord = async ({
   const supportsBidding = ['bidding', 'both'].includes(String(primaryVehicle?.dispatch_type || '').trim().toLowerCase());
   const requestedBookingMode = String(bookingMode || '').trim().toLowerCase();
   const normalizedServiceType = normalizeServiceType(serviceType);
+
+  // The apps price a ride on the straight line between the pins. Raise it to
+  // the admin price for the road distance before anything else (bidding range,
+  // promo, subscription) reads the fare. Never lowers a fare, never throws.
+  if (normalizedServiceType === 'ride' && pricingRule) {
+    const serverChecked = await resolveServerCheckedFare({
+      rule: pricingRule,
+      pickupCoords,
+      dropCoords,
+      clientFare: safeFare,
+      clientDistanceMeters: safeEstimatedDistanceMeters,
+      clientDurationMinutes: safeEstimatedDurationMinutes,
+    });
+    if (serverChecked) {
+      safeFare = serverChecked.fare;
+      safeEstimatedDistanceMeters = serverChecked.distanceMeters;
+      safeEstimatedDurationMinutes = serverChecked.durationMinutes;
+    }
+  }
+
   const bidRideSettings = await getBidRideSettings();
   const fareIncreaseWaitMinutes = toPositiveNumber(
     bidRideSettings.user_fare_increase_wait_minutes,
@@ -1779,6 +1801,36 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
 
   if (nextStatus === RIDE_LIVE_STATUS.COMPLETED) {
     ride.completedAt = new Date();
+
+    // A trip that ran well beyond its booked distance is billed for the distance
+    // driven, before the wallet, commission and invoice read the fare. Best
+    // effort: a problem here must never stop a ride completing.
+    try {
+      const rule = ride.pricingSnapshot?.setPriceId
+        ? await SetPrice.findById(ride.pricingSnapshot.setPriceId).lean()
+        : null;
+      const correction = correctCompletedTripFare({ ride, rule });
+      if (correction) {
+        ride.fareAdjustment = {
+          originalFare: ride.fare,
+          bookedDistanceMeters: ride.estimatedDistanceMeters,
+          trackedDistanceMeters: ride.tripDistanceMeters,
+          billedDistanceMeters: correction.billedDistanceMeters,
+          reason: 'trip_longer_than_booked',
+          adjustedAt: new Date(),
+        };
+        console.info('[fare-guard] trip fare raised', {
+          rideId: String(ride._id),
+          from: ride.fare,
+          to: correction.fare,
+          bookedMeters: ride.estimatedDistanceMeters,
+          trackedMeters: ride.tripDistanceMeters,
+        });
+        ride.fare = correction.fare;
+      }
+    } catch (error) {
+      console.warn('[fare-guard] trip repricing skipped:', error?.message || error);
+    }
   }
 
   await ride.save();
@@ -1891,7 +1943,9 @@ export const updateRideDriverLocation = async ({ rideId, driverId, coordinates, 
     speed: Number.isFinite(Number(speed)) ? Number(speed) : null,
     updatedAt: new Date(),
   };
-  const ride = await Ride.findOneAndUpdate(
+  // 'before' so the previous fix comes back from the same atomic write: the
+  // step between the two feeds the trip odometer without a second read.
+  const previous = await Ride.findOneAndUpdate(
     { _id: rideId, driverId },
     {
       $set: {
@@ -1899,24 +1953,52 @@ export const updateRideDriverLocation = async ({ rideId, driverId, coordinates, 
       },
     },
     {
-      returnDocument: 'after',
+      returnDocument: 'before',
       projection: {
         _id: 1,
+        liveStatus: 1,
+        startedAt: 1,
         lastDriverLocation: 1,
       },
     },
   ).lean();
 
-  if (!ride) {
+  if (!previous) {
     throw new ApiError(404, 'Assigned ride not found');
   }
 
+  // Trip odometer: distance actually driven while the trip is running, used to
+  // reprice a trip that ran far beyond its booked distance. Counts only fixes
+  // taken after the trip started. Best effort: never fails a location update.
+  const previousFixAt = previous.lastDriverLocation?.updatedAt;
+  if (
+    previous.liveStatus === RIDE_LIVE_STATUS.STARTED
+    && previous.startedAt
+    && previousFixAt
+    && new Date(previousFixAt) >= new Date(previous.startedAt)
+  ) {
+    const step = odometerStepMeters({
+      previousCoordinates: previous.lastDriverLocation?.coordinates,
+      previousAt: previousFixAt,
+      nextCoordinates: normalizedCoords,
+      nextAt: nextDriverLocation.updatedAt,
+    });
+    if (step > 0) {
+      await Ride.updateOne(
+        { _id: previous._id, liveStatus: RIDE_LIVE_STATUS.STARTED },
+        { $inc: { tripDistanceMeters: Math.round(step) } },
+      ).catch((error) => {
+        console.warn('[fare-guard] odometer update skipped:', error?.message || error);
+      });
+    }
+  }
+
   return {
-    rideId: String(ride._id),
-    coordinates: ride.lastDriverLocation?.coordinates || normalizedCoords,
-    heading: ride.lastDriverLocation.heading,
-    speed: ride.lastDriverLocation.speed,
-    updatedAt: ride.lastDriverLocation.updatedAt,
+    rideId: String(previous._id),
+    coordinates: normalizedCoords,
+    heading: nextDriverLocation.heading,
+    speed: nextDriverLocation.speed,
+    updatedAt: nextDriverLocation.updatedAt,
   };
 };
 

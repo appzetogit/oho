@@ -318,6 +318,29 @@ const rideSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    // Distance actually driven while the trip was running, from the driver's
+    // live location fixes. Feeds the end-of-trip fare check.
+    tripDistanceMeters: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    // Set only when the fare was raised at completion because the trip ran well
+    // beyond its booked distance. Kept so support can explain the change.
+    fareAdjustment: {
+      type: new mongoose.Schema(
+        {
+          originalFare: { type: Number, default: null },
+          bookedDistanceMeters: { type: Number, default: null },
+          trackedDistanceMeters: { type: Number, default: null },
+          billedDistanceMeters: { type: Number, default: null },
+          reason: { type: String, default: '' },
+          adjustedAt: { type: Date, default: null },
+        },
+        { _id: false },
+      ),
+      default: undefined,
+    },
     paymentMethod: {
       type: String,
       enum: ['cash', 'online'],
