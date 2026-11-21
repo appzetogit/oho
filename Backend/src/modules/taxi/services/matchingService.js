@@ -49,11 +49,6 @@ const buildDriverMatchFilters = ({ zoneId, serviceLocationId, vehicleTypeId, veh
             ]
           : []),
       ];
-  const vehicleTypeFilter =
-    vehicleTypeClauses.length > 1
-      ? { $or: vehicleTypeClauses }
-      : vehicleTypeClauses[0] || {};
-
   // Fleet drivers are paid through their owner, so the wallet minimum doesn't
   // apply to them (accepting skips it too). Everyone else must meet the live
   // minimum; the stored isBlocked flag can be days out of date.
@@ -65,6 +60,16 @@ const buildDriverMatchFilters = ({ zoneId, serviceLocationId, vehicleTypeId, veh
         ...(minimum <= 0 ? [{ 'wallet.balance': { $exists: false } }] : []),
       ];
 
+  // The wallet rule and the vehicle type can both be an $or. Spread into one
+  // object, the vehicle $or replaced the wallet one, so drivers below the
+  // wallet minimum were matched whenever the vehicle was picked by name.
+  // With the wallet switched off there is no wallet clause at all (an $or of
+  // just "fleet driver" would have left out every independent driver).
+  const andClauses = [
+    ...(walletClauses.length ? [{ $or: [{ owner_id: { $ne: null } }, ...walletClauses] }] : []),
+    ...(vehicleTypeClauses.length > 1 ? [{ $or: vehicleTypeClauses }] : []),
+  ];
+
   return {
     isOnline: true,
     isOnRide: false,
@@ -72,13 +77,10 @@ const buildDriverMatchFilters = ({ zoneId, serviceLocationId, vehicleTypeId, veh
     // not when they next go offline.
     approve: true,
     deletedAt: null,
-    $or: [
-      { owner_id: { $ne: null } },
-      ...walletClauses,
-    ],
+    ...(andClauses.length ? { $and: andClauses } : {}),
     ...(zoneId ? { zoneId } : {}),
     ...(serviceLocationId ? { service_location_id: serviceLocationId } : {}),
-    ...vehicleTypeFilter,
+    ...(vehicleTypeClauses.length === 1 ? vehicleTypeClauses[0] : {}),
   };
 };
 
@@ -186,15 +188,10 @@ const getDistanceBetweenMeters = (origin, target) => {
   return Math.round(2 * EARTH_RADIUS_METERS * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 };
 
+// Where the driver is now. A route-booking driver's saved pin is where they
+// want to go, not where they are: matching from the pin offered rides to
+// drivers kilometres away from the pickup.
 const getDriverMatchCoordinates = (driver = {}) => {
-  const anchorCoordinates = Array.isArray(driver?.routeBooking?.anchorLocation?.coordinates)
-    ? driver.routeBooking.anchorLocation.coordinates
-    : [];
-
-  if (driver?.routeBooking?.enabled && anchorCoordinates.length === 2) {
-    return normalizePoint(anchorCoordinates, 'driver.routeBooking.anchorLocation.coordinates');
-  }
-
   if (Array.isArray(driver?.location?.coordinates) && driver.location.coordinates.length === 2) {
     return normalizePoint(driver.location.coordinates, 'driver.location.coordinates');
   }
@@ -270,12 +267,21 @@ const filterDriversForMatchedZone = ({ drivers = [], zone = null, pickupCoords, 
 // build in drivers' hands today stops sending when locked, so on 21 Nov this
 // rule left 13 of 17 online drivers unable to get any ride. Turn it back on
 // with 10 * 60 * 1000 once that build is widely installed.
-export const DRIVER_LOCATION_MAX_AGE_MS = null;
+//
+// Switched on from Backend/.env without a code change:
+// DRIVER_LOCATION_MAX_AGE_MS=<milliseconds> (e.g. 180000 = 3 minutes).
+// Unset or 0 = off. Read on every search, so a pm2 reload --update-env applies it.
+export const getDriverLocationMaxAgeMs = () => {
+  const ms = Number(process.env.DRIVER_LOCATION_MAX_AGE_MS);
+  return Number.isFinite(ms) && ms > 0 ? Math.round(ms) : null;
+};
 
-const locationFreshnessFilter = () =>
-  DRIVER_LOCATION_MAX_AGE_MS
-    ? { locationUpdatedAt: { $gte: new Date(Date.now() - DRIVER_LOCATION_MAX_AGE_MS) } }
+const locationFreshnessFilter = () => {
+  const maxAgeMs = getDriverLocationMaxAgeMs();
+  return maxAgeMs
+    ? { locationUpdatedAt: { $gte: new Date(Date.now() - maxAgeMs) } }
     : {};
+};
 
 const buildGeoNearFilter = (field, coordinates, maxDistance) => ({
   [field]: {
@@ -289,28 +295,25 @@ const buildGeoNearFilter = (field, coordinates, maxDistance) => ({
   },
 });
 
-const getDispatchAnchorCoordinates = (driver = {}) => {
-  const routeCoordinates = Array.isArray(driver?.routeBooking?.anchorLocation?.coordinates)
-    ? driver.routeBooking.anchorLocation.coordinates
-    : [];
+// $centerSphere takes radians: metres / Earth's radius.
+const buildGeoWithinFilter = (field, coordinates, maxDistance) => ({
+  [field]: {
+    $geoWithin: {
+      $centerSphere: [coordinates, maxDistance / EARTH_RADIUS_METERS],
+    },
+  },
+});
 
-  if (driver?.routeBooking?.enabled && routeCoordinates.length === 2) {
-    return routeCoordinates;
-  }
-
-  return Array.isArray(driver?.location?.coordinates) ? driver.location.coordinates : [];
-};
-
+// Nearest first, by where the driver is now.
 const sortDriversByDispatchAnchorDistance = (drivers = [], pickupCoords) =>
   [...drivers]
     .map((driver) => {
-      const anchorCoordinates = getDispatchAnchorCoordinates(driver);
+      const coordinates = getDriverMatchCoordinates(driver);
       return {
         driver,
-        distanceMeters:
-          anchorCoordinates.length === 2
-            ? getDistanceBetweenMeters(pickupCoords, anchorCoordinates)
-            : Number.POSITIVE_INFINITY,
+        distanceMeters: coordinates
+          ? getDistanceBetweenMeters(pickupCoords, coordinates)
+          : Number.POSITIVE_INFINITY,
       };
     })
     .sort((left, right) => left.distanceMeters - right.distanceMeters)
@@ -361,12 +364,20 @@ const findDriversForZone = async ({
     })
       .limit(limit)
       .select(selectedFields),
+    // Route-booking drivers: where they are now must be within the radius,
+    // and so must their saved pin.
     Driver.find({
       ...commonFilters,
       'routeBooking.enabled': true,
       'routeBooking.anchorLocation': { $ne: null },
       'routeBooking.anchorLocation.coordinates.1': { $exists: true },
-      ...(strictZoneOnly ? {} : buildGeoNearFilter('routeBooking.anchorLocation', coordinates, effectiveMaxDistance)),
+      ...locationFreshnessFilter(),
+      ...(strictZoneOnly
+        ? {}
+        : {
+            ...buildGeoNearFilter('location', coordinates, effectiveMaxDistance),
+            ...buildGeoWithinFilter('routeBooking.anchorLocation', coordinates, effectiveMaxDistance),
+          }),
     })
       .limit(limit)
       .select(selectedFields),

@@ -604,6 +604,7 @@ driverSchema.index({ phone: 1, deletedAt: 1 });
 driverSchema.index({ acquiredByEmployeeCode: 1 });
 
 driverSchema.index({ location: '2dsphere' });
+driverSchema.index({ isOnline: 1, locationUpdatedAt: -1 });
 driverSchema.index({ 'routeBooking.anchorLocation': '2dsphere' });
 
 export const Driver = mongoose.models.TaxiDriver || mongoose.model('TaxiDriver', driverSchema);
