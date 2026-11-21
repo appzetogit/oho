@@ -1807,7 +1807,16 @@ export const notifyRideAccepted = async (ride) => {
   const state = getDispatchState(ride._id);
   stopDispatchFlow(ride._id);
   // Offers may have gone out from the other API worker; its list is on the ride.
-  mergePersistedNotifiedDrivers(state, await persistDispatchTrackingProgress({ rideId: ride._id, reset: true }).catch(() => null));
+  // The reset hands back the list as it was just before clearing it. If the
+  // reset failed, read the ride instead, so the other drivers are still told.
+  const persistedBeforeReset = await persistDispatchTrackingProgress({ rideId: ride._id, reset: true }).catch(() => null);
+  mergePersistedNotifiedDrivers(
+    state,
+    persistedBeforeReset ||
+      getPersistedDispatchTracking(
+        await Ride.findById(ride._id).select('dispatchTracking').lean().catch(() => null),
+      ),
+  );
 
   // Once one driver wins the race, the rider is updated and the rest are told to stop.
   const populatedRide = await Ride.findById(ride._id).populate(
@@ -1887,20 +1896,27 @@ export const notifyRideAccepted = async (ride) => {
     otp: populatedRide.otp || '',
   });
 
+  const acceptedDriverId = String(populatedRide.driverId._id);
+  const otherDriverIds = state.notifiedDriverIds.filter((id) => String(id) !== acceptedDriverId);
+
   emitToRoom(getRideRoom(populatedRide._id), 'rideRequestClosed', {
     rideId: String(populatedRide._id),
-        acceptedDriverId: String(populatedRide.driverId._id),
-        notifiedDriverIds: state.notifiedDriverIds,
-        reason: 'accepted-by-another-driver',
+    acceptedDriverId,
+    notifiedDriverIds: state.notifiedDriverIds,
+    reason: 'accepted-by-another-driver',
   });
 
-  for (const driverId of state.notifiedDriverIds) {
+  for (const driverId of otherDriverIds) {
     emitToDriver(driverId, 'rideRequestClosed', {
       rideId: String(populatedRide._id),
-      acceptedDriverId: String(populatedRide.driverId._id),
+      acceptedDriverId,
       reason: 'accepted-by-another-driver',
     });
   }
+  // The socket only reaches an app that is awake. A locked phone shows the
+  // native full-screen offer card, which closes only on this push; without it
+  // the card stayed up after another driver took the ride.
+  sendRideOfferClosedPush(otherDriverIds, populatedRide._id);
 
   sendPushNotificationToEntities({
     userIds: [String(populatedRide.userId)],
