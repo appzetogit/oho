@@ -262,10 +262,20 @@ const filterDriversForMatchedZone = ({ drivers = [], zone = null, pickupCoords, 
   });
 
 // A driver's live location counts for matching only this long after the phone
-// last sent it. The app re-sends at least every 60 s while online, so this
-// allows two missed updates. Past it the position is a guess: a driver who
-// went online at home and drove 8 km kept getting offers for home.
-export const DRIVER_LOCATION_MAX_AGE_MS = 3 * 60 * 1000;
+// last sent it. Past it the position is a guess: a driver who went online at
+// home and drove 8 km kept getting offers for home.
+//
+// SWITCHED OFF (null) until most drivers run the driver app that keeps sending
+// location while the phone is locked (flutterdriver e0e5b85 or later). The
+// build in drivers' hands today stops sending when locked, so on 21 Nov this
+// rule left 13 of 17 online drivers unable to get any ride. Turn it back on
+// with 10 * 60 * 1000 once that build is widely installed.
+export const DRIVER_LOCATION_MAX_AGE_MS = null;
+
+const locationFreshnessFilter = () =>
+  DRIVER_LOCATION_MAX_AGE_MS
+    ? { locationUpdatedAt: { $gte: new Date(Date.now() - DRIVER_LOCATION_MAX_AGE_MS) } }
+    : {};
 
 const buildGeoNearFilter = (field, coordinates, maxDistance) => ({
   [field]: {
@@ -346,7 +356,7 @@ const findDriversForZone = async ({
     Driver.find({
       ...commonFilters,
       'routeBooking.enabled': { $ne: true },
-      locationUpdatedAt: { $gte: new Date(Date.now() - DRIVER_LOCATION_MAX_AGE_MS) },
+      ...locationFreshnessFilter(),
       ...(strictZoneOnly ? {} : buildGeoNearFilter('location', coordinates, effectiveMaxDistance)),
     })
       .limit(limit)
