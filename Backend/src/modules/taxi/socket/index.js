@@ -245,6 +245,7 @@ export const configureTaxiSocketServer = async (httpServer) => {
           await Driver.findByIdAndUpdate(identity.sub, {
             socketId: socket.id,
             location: toPoint(normalizedCoords, 'coordinates'),
+            locationUpdatedAt: new Date(now),
             zoneId: zone?._id || null,
           });
         }

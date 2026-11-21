@@ -43,6 +43,7 @@ import {
 import { cancelRideByDriver, emitToDriver } from "../../services/dispatchService.js";
 import { CancellationReason } from "../../admin/models/CancellationReason.js";
 import { notifyLateAvailableDriver } from "../../services/dispatchService.js";
+import { forwardNativeLocationToRide } from "../../services/nativeRideLocationService.js";
 import { findZoneByPickup } from "../services/locationService.js";
 import { listDriverServiceLocations } from "../services/serviceLocationService.js";
 import {
@@ -2868,6 +2869,7 @@ export const goOnline = async (req, res) => {
       zoneId: zone?._id || null,
       ...(existingDriver.owner_id ? { 'wallet.isBlocked': false } : {}),
       location: toPoint(coordinates, "location"),
+      locationUpdatedAt: new Date(),
       onlineSelfie: nextOnlineSelfie,
       incentiveTracking: {
         ...trackingBeforeOnline,
@@ -2897,6 +2899,57 @@ export const goOnline = async (req, res) => {
   notifyLateAvailableDriver(driver._id).catch((error) => {
     console.error("Failed to notify late-available driver on goOnline", error);
   });
+};
+
+// Live position from the app's native location service, which keeps running
+// after the driver swipes the app away (Flutter, and its socket, die with the
+// app). Sent every few seconds while online or on a trip. On a trip it also
+// moves the rider's live map, which otherwise froze once the app was closed.
+// Answers keepSharing so the service stops itself once the driver is neither
+// online nor on a trip (admin, 12-hour limit, another device).
+export const updateLiveLocation = async (req, res) => {
+  const { location, heading, speed, accuracy } = req.body || {};
+  const coordinates = normalizePoint(location, "location");
+
+  const driver = await Driver.findById(req.auth.sub).select("_id isOnline isOnRide");
+  if (!driver) {
+    throw new ApiError(404, "Driver not found");
+  }
+  const keepSharing = Boolean(driver.isOnline || driver.isOnRide);
+  if (!keepSharing) {
+    res.json({ success: true, data: { isOnline: false, keepSharing: false } });
+    return;
+  }
+
+  const zone = await findZoneByPickup(coordinates);
+  await Driver.updateOne(
+    { _id: driver._id },
+    {
+      $set: {
+        location: toPoint(coordinates, "location"),
+        locationUpdatedAt: new Date(),
+        zoneId: zone?._id || null,
+      },
+    },
+  );
+
+  res.json({ success: true, data: { isOnline: Boolean(driver.isOnline), keepSharing: true } });
+
+  if (driver.isOnRide) {
+    forwardNativeLocationToRide({
+      driverId: driver._id,
+      coordinates,
+      heading,
+      speed,
+      accuracy,
+    }).catch((error) => {
+      console.error("Failed to forward native location to ride", error);
+    });
+  } else {
+    notifyLateAvailableDriver(driver._id).catch((error) => {
+      console.error("Failed to notify late-available driver on live location", error);
+    });
+  }
 };
 
 export const getCurrentDriver = async (req, res) => {

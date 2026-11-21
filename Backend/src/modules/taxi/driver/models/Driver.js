@@ -474,6 +474,14 @@ const driverSchema = new mongoose.Schema(
         default: [0, 0],
       },
     },
+    // When `location` last came from the driver's phone. Matching skips drivers
+    // whose fix is older than a few minutes: an app that stopped sending (killed,
+    // no network, an old build that only sent on go-online) otherwise kept
+    // getting offers for wherever the driver used to be.
+    locationUpdatedAt: {
+      type: Date,
+      default: null,
+    },
     routeBooking: {
       enabled: {
         type: Boolean,

@@ -36,6 +36,7 @@ import {
   claimDriverIncentiveReward,
   goOffline,
   goOnline,
+  updateLiveLocation,
   createBusDriverReservation,
   getBusDriverLiveTrip,
   updateBusDriverSchedules,
@@ -625,6 +626,7 @@ driverRouter.get(
   asyncHandler(getOnboardingSession),
 );
 driverRouter.patch("/online", authenticate(["driver"]), asyncHandler(goOnline));
+driverRouter.post("/location", authenticate(["driver"]), asyncHandler(updateLiveLocation));
 driverRouter.patch(
   "/offline",
   authenticate(["driver"]),

@@ -261,6 +261,12 @@ const filterDriversForMatchedZone = ({ drivers = [], zone = null, pickupCoords, 
     return true;
   });
 
+// A driver's live location counts for matching only this long after the phone
+// last sent it. The app re-sends at least every 60 s while online, so this
+// allows two missed updates. Past it the position is a guess: a driver who
+// went online at home and drove 8 km kept getting offers for home.
+export const DRIVER_LOCATION_MAX_AGE_MS = 3 * 60 * 1000;
+
 const buildGeoNearFilter = (field, coordinates, maxDistance) => ({
   [field]: {
     $near: {
@@ -340,6 +346,7 @@ const findDriversForZone = async ({
     Driver.find({
       ...commonFilters,
       'routeBooking.enabled': { $ne: true },
+      locationUpdatedAt: { $gte: new Date(Date.now() - DRIVER_LOCATION_MAX_AGE_MS) },
       ...(strictZoneOnly ? {} : buildGeoNearFilter('location', coordinates, effectiveMaxDistance)),
     })
       .limit(limit)
