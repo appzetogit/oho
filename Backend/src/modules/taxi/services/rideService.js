@@ -957,9 +957,10 @@ export const createRideRecord = async ({
   const requestedBookingMode = String(bookingMode || '').trim().toLowerCase();
   const normalizedServiceType = normalizeServiceType(serviceType);
 
-  // The apps price a ride on the straight line between the pins. Raise it to
-  // the admin price for the road distance before anything else (bidding range,
-  // promo, subscription) reads the fare. Never lowers a fare, never throws.
+  // The fare is exactly the admin price list for the road distance, worked out
+  // here, before anything else (bidding range, promo, subscription) reads it.
+  // The app's own number is kept only when the ride cannot be priced at all.
+  let bookingPriceHikeMultiplier = 1;
   if (normalizedServiceType === 'ride' && pricingRule) {
     const serverChecked = await resolveServerCheckedFare({
       rule: pricingRule,
@@ -973,6 +974,7 @@ export const createRideRecord = async ({
       safeFare = serverChecked.fare;
       safeEstimatedDistanceMeters = serverChecked.distanceMeters;
       safeEstimatedDurationMinutes = serverChecked.durationMinutes;
+      bookingPriceHikeMultiplier = serverChecked.priceHikeMultiplier;
     }
   }
 
@@ -1055,6 +1057,7 @@ export const createRideRecord = async ({
     free_waiting_after: Number(pricingRule?.free_waiting_after ?? 0),
     allowed_payment_methods: allowedPaymentMethods,
     resolvedAt: pricingRule ? new Date() : null,
+    priceHikeMultiplier: bookingPriceHikeMultiplier,
   };
 
   const promoCode = typeof promo_code === 'string' ? promo_code.trim() : '';

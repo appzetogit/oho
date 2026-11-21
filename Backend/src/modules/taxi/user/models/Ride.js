@@ -526,6 +526,12 @@ const rideSchema = new mongoose.Schema(
         type: Date,
         default: null,
       },
+      // Price hike in force when the ride was booked, so a trip repriced at
+      // completion uses the same rates the booking did.
+      priceHikeMultiplier: {
+        type: Number,
+        default: 1,
+      },
     },
     commissionAmount: {
       type: Number,

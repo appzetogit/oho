@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  applyHike,
   computeDistanceFare,
-  correctBookingFare,
+  computeListFare,
   correctCompletedTripFare,
+  priceBookingFare,
   odometerStepMeters,
 } from '../fareGuardRules.js';
 
@@ -16,37 +18,42 @@ test('formula matches fares the apps produced on live rides', () => {
   assert.equal(Math.round(computeDistanceFare(AUTO, 7290, 17.5)), 119);
 });
 
-test('booking: road distance longer than the pins raises the fare', () => {
-  const result = correctBookingFare({
-    rule: AUTO,
-    clientFare: 57,
-    clientDistanceMeters: 1390,
-    clientDurationMinutes: 3.34,
-    roadDistanceMeters: 11000,
-    roadDurationMinutes: 20,
-  });
-  // 50 + 8 km * 8 + max(3.34, 11*2.4=26.4, 20) * 2 = 166.8, minus the 56.7 the app used, on top of 57.
-  assert.ok(result);
-  assert.equal(result.distanceMeters, 11000);
-  assert.equal(result.fare, Math.round(57 + computeDistanceFare(AUTO, 11000, 26.43) - computeDistanceFare(AUTO, 1390, 3.34)));
-  assert.ok(result.fare > 150 && result.fare < 175);
+test('booking: exactly the price list for the road distance', () => {
+  // Remuna -> Sai Nilaya: app priced 7.29 km straight line at Rs119; road is 10.6 km.
+  const result = priceBookingFare({ rule: AUTO, clientDistanceMeters: 7290, clientDurationMinutes: 17.5, roadDistanceMeters: 10600 });
+  assert.equal(result.source, 'road');
+  assert.equal(result.distanceMeters, 10600);
+  // 50 + 7.6 km * 8 + (10.6 km * 2.4 min/km) * 2
+  assert.equal(result.fare, Math.round(50 + 7.6 * 8 + 10.6 * (17.5 / 7.29) * 2));
 });
 
-test('booking: keeps the app fare when the road is about the same', () => {
-  assert.equal(correctBookingFare({ rule: AUTO, clientFare: 57, clientDistanceMeters: 1390, clientDurationMinutes: 3.34, roadDistanceMeters: 1600 }), null);
+test('booking: same distance gives the same fare the app shows', () => {
+  assert.equal(priceBookingFare({ rule: AUTO, clientDistanceMeters: 6510, clientDurationMinutes: 15.6, roadDistanceMeters: 6510 }).fare, 109);
 });
 
-test('booking: never lowers, and keeps a price hike the app added', () => {
-  // App already charged 1.5x for the same distance: the correction adds only the distance difference.
-  const hiked = correctBookingFare({ rule: AUTO, clientFare: 90, clientDistanceMeters: 5000, clientDurationMinutes: 12, roadDistanceMeters: 6000 });
-  assert.ok(hiked.fare > 90);
-  assert.equal(correctBookingFare({ rule: AUTO, clientFare: 500, clientDistanceMeters: 5000, clientDurationMinutes: 12, roadDistanceMeters: 4000 }), null);
+test('booking: a fare the app sent too high or too low does not matter', () => {
+  // The app's fare is not an input at all: only the price list and distance are.
+  const a = priceBookingFare({ rule: AUTO, clientDistanceMeters: 5000, clientDurationMinutes: 12, roadDistanceMeters: 4000 });
+  assert.equal(a.fare, computeListFare(AUTO, 4000, 4 * 2.4));
 });
 
-test('booking: missing rule, bad fare or no route leaves the booking alone', () => {
-  assert.equal(correctBookingFare({ rule: null, clientFare: 57, clientDistanceMeters: 1390, roadDistanceMeters: 11000 }), null);
-  assert.equal(correctBookingFare({ rule: AUTO, clientFare: 'x', clientDistanceMeters: 1390, roadDistanceMeters: 11000 }), null);
-  assert.equal(correctBookingFare({ rule: AUTO, clientFare: 57, clientDistanceMeters: 1390, roadDistanceMeters: null }), null);
+test('booking: route lookup failed -> app distance, still priced from the list', () => {
+  const result = priceBookingFare({ rule: AUTO, clientDistanceMeters: 1390, clientDurationMinutes: 3.337, roadDistanceMeters: null });
+  assert.equal(result.source, 'app_distance');
+  assert.equal(result.fare, 57);
+});
+
+test('booking: unpriceable rides keep the app fare (null)', () => {
+  assert.equal(priceBookingFare({ rule: null, clientDistanceMeters: 1390, roadDistanceMeters: 2000 }), null);
+  assert.equal(priceBookingFare({ rule: AUTO, clientDistanceMeters: 0, roadDistanceMeters: null }), null);
+  assert.equal(priceBookingFare({ rule: { base_price: 0, price_per_distance: 0, time_price: 0 }, clientDistanceMeters: 1000, roadDistanceMeters: 2000 }), null);
+});
+
+test('booking: price hike and service tax follow the price list', () => {
+  const hiked = applyHike(AUTO, 1.5);
+  assert.deepEqual([hiked.base_price, hiked.price_per_distance, hiked.time_price, hiked.base_distance], [75, 12, 3, 3]);
+  assert.equal(applyHike(AUTO, 1), AUTO);
+  assert.equal(computeListFare({ ...AUTO, service_tax: 5 }, 1390, 3.337), Math.round(56.674 * 1.05));
 });
 
 const tripRide = (over = {}) => ({

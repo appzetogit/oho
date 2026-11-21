@@ -1,5 +1,6 @@
 import { resolveRoute } from './routingService.js';
-import { correctBookingFare } from './fareGuardRules.js';
+import { getActivePriceHikeMultiplier } from './priceHikeService.js';
+import { applyHike, priceBookingFare } from './fareGuardRules.js';
 
 /** The road lookup may not hold up a booking for longer than this. */
 const ROUTE_LOOKUP_BUDGET_MS = 3500;
@@ -8,11 +9,14 @@ const withBudget = (promise, ms) =>
   Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(null), ms))]);
 
 /**
- * Raises a booking's fare to the admin price for the ROAD distance, when the app
- * priced it on a shorter distance (the straight line between the pins).
+ * The booking fare, worked out here from the admin price list: exactly the
+ * price for the road distance, with any price hike in force right now.
  *
- * Never throws and never lowers a fare: a routing outage, a missing price rule
- * or anything unexpected leaves the booking exactly as the app sent it.
+ * The app's own fare is not trusted (it was priced on the straight line between
+ * the pins, and a modified app could send anything). If the road lookup fails,
+ * the app's distance is priced instead, still from the price list. Returns null
+ * only when the ride cannot be priced at all, and never throws: the booking
+ * then keeps the app's fare exactly as before.
  */
 export const resolveServerCheckedFare = async ({
   rule,
@@ -25,35 +29,40 @@ export const resolveServerCheckedFare = async ({
   try {
     const [pickupLng, pickupLat] = (pickupCoords || []).map(Number);
     const [dropLng, dropLat] = (dropCoords || []).map(Number);
-    if (![pickupLng, pickupLat, dropLng, dropLat].every(Number.isFinite)) return null;
+    const haveCoords = [pickupLng, pickupLat, dropLng, dropLat].every(Number.isFinite);
 
-    const route = await withBudget(
-      resolveRoute({ origin: `${pickupLat},${pickupLng}`, destination: `${dropLat},${dropLng}` }),
-      ROUTE_LOOKUP_BUDGET_MS,
-    );
-    if (!route?.distanceMeters) return null;
+    const [route, multiplier] = await Promise.all([
+      haveCoords
+        ? withBudget(
+            resolveRoute({ origin: `${pickupLat},${pickupLng}`, destination: `${dropLat},${dropLng}` }),
+            ROUTE_LOOKUP_BUDGET_MS,
+          )
+        : null,
+      getActivePriceHikeMultiplier().catch(() => 1),
+    ]);
 
-    const correction = correctBookingFare({
-      rule,
-      clientFare,
+    const priced = priceBookingFare({
+      rule: applyHike(rule, multiplier),
       clientDistanceMeters,
       clientDurationMinutes,
-      roadDistanceMeters: route.distanceMeters,
-      roadDurationMinutes: route.durationMinutes,
+      roadDistanceMeters: route?.distanceMeters,
     });
+    if (!priced) return null;
 
-    if (correction) {
-      console.info('[fare-guard] booking fare raised', {
-        from: Number(clientFare),
-        to: correction.fare,
+    if (priced.fare !== Math.round(Number(clientFare))) {
+      console.info('[fare-guard] booking priced from the price list', {
+        appFare: Number(clientFare),
+        fare: priced.fare,
         appMeters: Math.round(Number(clientDistanceMeters) || 0),
-        roadMeters: correction.distanceMeters,
+        meters: priced.distanceMeters,
+        source: priced.source,
+        hike: multiplier,
       });
     }
 
-    return correction;
+    return { ...priced, priceHikeMultiplier: multiplier > 1 ? multiplier : 1 };
   } catch (error) {
-    console.warn('[fare-guard] booking check skipped:', error?.message || error);
+    console.warn('[fare-guard] booking pricing skipped:', error?.message || error);
     return null;
   }
 };
