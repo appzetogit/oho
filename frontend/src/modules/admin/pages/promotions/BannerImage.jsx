@@ -35,7 +35,33 @@ const createInitialFormData = () => ({
   image_url: '',
   use_url: false,
   audience: 'user',
+  link_url: '',
 });
+
+const isWebAddress = (value = '') => /^https?:\/\/[^\s/$.?#].[^\s]*$/i.test(String(value).trim());
+
+/**
+ * True when [url] loads as a picture in the browser. A page link (a Play
+ * Store listing, a website) does not, and saving one as the banner image left
+ * a broken banner in the admin and in the apps.
+ */
+const loadsAsImage = (url, timeoutMs = 10000) =>
+  new Promise((resolve) => {
+    const img = new Image();
+    const timer = setTimeout(() => {
+      img.src = '';
+      resolve(false);
+    }, timeoutMs);
+    img.onload = () => {
+      clearTimeout(timer);
+      resolve(img.naturalWidth > 0 && img.naturalHeight > 0);
+    };
+    img.onerror = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    img.src = url;
+  });
 
 const BannerImage = () => {
   const navigate = useNavigate();
@@ -181,7 +207,27 @@ const BannerImage = () => {
       return;
     }
 
+    const linkUrl = formData.link_url.trim();
+    if (linkUrl && !isWebAddress(linkUrl)) {
+      alert('The link to open must be a web address starting with http:// or https://');
+      return;
+    }
+
     setSaving(true);
+    if (formData.use_url) {
+      const imageUrl = formData.image_url.trim();
+      const isImage = isWebAddress(imageUrl) && (await loadsAsImage(imageUrl));
+      if (!isImage) {
+        setSaving(false);
+        alert(
+          'This image URL is not a picture (for example a Play Store or website page).\n\n'
+          + 'Upload the banner picture instead, or paste a direct image link (ending in .jpg, .png or .webp).\n'
+          + 'To open a page when the banner is tapped, put that link in "Link to open when tapped".',
+        );
+        return;
+      }
+    }
+
     try {
       let imageData = formData.use_url ? formData.image_url.trim() : '';
 
@@ -199,6 +245,11 @@ const BannerImage = () => {
         image_url: formData.image_url.trim(),
         use_url: formData.use_url,
         audience: formData.audience,
+        // Where a tap on the banner goes. Stored by the server as the banner's
+        // external link; empty means the banner does not open anything.
+        link_type: 'external_link',
+        external_link: linkUrl,
+        redirect_url: linkUrl,
       };
 
       const res = await fetch(`${baseUrl}/banners`, {
@@ -532,8 +583,23 @@ const BannerImage = () => {
                       className="w-full max-w-xl border border-gray-200 rounded-lg px-4 py-2.5 text-sm text-gray-800 bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-colors"
                       placeholder="https://example.com/banner.jpg"
                     />
+                    <p className="mt-1 text-xs text-gray-500">A direct link to the picture itself, not a web page.</p>
                   </div>
                 ) : null}
+              </div>
+
+              <div>
+                <label className="block text-[14px] font-semibold text-gray-900 mb-2">
+                  Link to open when tapped <span className="font-normal text-gray-500">(optional)</span>
+                </label>
+                <input
+                  type="url"
+                  value={formData.link_url}
+                  onChange={(e) => setFormData((current) => ({ ...current, link_url: e.target.value }))}
+                  className="w-full max-w-xl border border-gray-200 rounded-lg px-4 py-2.5 text-sm text-gray-800 bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-colors"
+                  placeholder="https://play.google.com/store/apps/details?id=com.ohoride.appzeto"
+                />
+                <p className="mt-1 text-xs text-gray-500">For example your Play Store page or a website. Leave empty if the banner should not open anything.</p>
               </div>
             </div>
 
