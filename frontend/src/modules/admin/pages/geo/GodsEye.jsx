@@ -15,9 +15,7 @@ import { useNavigate } from 'react-router-dom';
 import { useBaseGoogleMapsLoader, HAS_VALID_GOOGLE_MAPS_KEY } from '../../utils/googleMaps';
 import { adminService } from '../../services/adminService';
 
-import CarIcon from '@/assets/icons/car.png';
-import BikeIcon from '@/assets/icons/bike.png';
-import AutoIcon from '@/assets/icons/auto.png';
+import { buildVehicleTypeIndex, getDriverMapIcon } from '../../utils/vehicleMapIcon';
 
 const INDIA_CENTER = { lat: 22.7196, lng: 75.8577 };
 
@@ -45,13 +43,6 @@ const mapOptions = {
     { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#c9c9c9' }] },
     { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#9e9e9e' }] }
   ]
-};
-
-const getMapIconForVehicle = (iconType = '') => {
-  const value = String(iconType || '').trim().toLowerCase();
-  if (value.includes('bike')) return BikeIcon;
-  if (value.includes('auto')) return AutoIcon;
-  return CarIcon;
 };
 
 const hasUsableCoordinates = (latitude, longitude) => {
@@ -113,6 +104,7 @@ const GodsEye = () => {
       })
       .catch(() => setVehicleTypes([]));
   }, []);
+  const vehicleTypeIndex = useMemo(() => buildVehicleTypeIndex(vehicleTypes), [vehicleTypes]);
 
   // Fetch Logic
   const fetchMapData = useCallback(async () => {
@@ -500,7 +492,7 @@ const GodsEye = () => {
                                        onClick={() => handleMarkerClick(driver)}
                                        clusterer={clusterer}
                                        icon={{
-                                          url: getMapIconForVehicle(driver.vehicle_icon_type || driver.vehicle_type),
+                                          url: getDriverMapIcon(driver, vehicleTypeIndex),
                                           scaledSize: new window.google.maps.Size(32, 32),
                                           anchor: new window.google.maps.Point(16, 16),
                                        }}
@@ -516,7 +508,7 @@ const GodsEye = () => {
                               position={{ lat: Number(driver.latitude), lng: Number(driver.longitude) }}
                               onClick={() => handleMarkerClick(driver)}
                               icon={{
-                                 url: getMapIconForVehicle(driver.vehicle_icon_type || driver.vehicle_type),
+                                 url: getDriverMapIcon(driver, vehicleTypeIndex),
                                  scaledSize: new window.google.maps.Size(32, 32),
                                  anchor: new window.google.maps.Point(16, 16),
                               }}

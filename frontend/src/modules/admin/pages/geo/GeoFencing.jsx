@@ -17,6 +17,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { Autocomplete, GoogleMap, MarkerF, Polygon } from '@react-google-maps/api';
 import { adminService } from '../../services/adminService';
 import { HAS_VALID_GOOGLE_MAPS_KEY, useAppGoogleMapsLoader } from '../../utils/googleMaps';
+import { buildVehicleTypeIndex, getDriverMapIcon, getDriverPosition } from '../../utils/vehicleMapIcon';
 
 const DEFAULT_CENTER = { lat: 22.7196, lng: 75.8577 };
 const MAP_CONTAINER_STYLE = { width: '100%', height: '100%' };
@@ -120,30 +121,28 @@ const formatZone = (zone, index) => {
   };
 };
 
-const createFleetMarkers = (zones) =>
-  zones.slice(0, 12).flatMap((zone, index) => {
-    const offsetBase = (index % 4) * 0.006 + 0.004;
-    return [
-      {
-        id: `${zone.id}-driver`,
-        label: `Driver near ${zone.name}`,
-        position: {
-          lat: zone.center.lat + offsetBase,
-          lng: zone.center.lng - offsetBase * 0.7
-        },
+// Real online drivers at their live position. This page used to draw a made-up
+// "driver" and "demand" marker beside every zone's centre and counted those as
+// online, so the map showed vehicles that did not exist.
+const createFleetMarkers = (drivers, vehicleTypeIndex) =>
+  (Array.isArray(drivers) ? drivers : [])
+    .filter((driver) => driver?.isOnline)
+    .map((driver) => {
+      const position = getDriverPosition(driver);
+      if (!position) return null;
+      const name = driver.name || driver.driver_name || 'Driver';
+      const vehicle = [driver.vehicle_type, driver.vehicle_number].filter(Boolean).join(' · ');
+      return {
+        id: String(driver._id || driver.id),
+        label: vehicle ? `${name} (${vehicle})` : name,
+        position,
+        icon: getDriverMapIcon(driver, vehicleTypeIndex),
         kind: 'driver'
-      },
-      {
-        id: `${zone.id}-rider`,
-        label: `Demand in ${zone.name}`,
-        position: {
-          lat: zone.center.lat - offsetBase * 0.5,
-          lng: zone.center.lng + offsetBase * 0.55
-        },
-        kind: 'demand'
-      }
-    ];
-  });
+      };
+    })
+    .filter(Boolean);
+
+const DRIVER_REFRESH_MS = 30 * 1000;
 
 const ZoneCard = ({ zone, selected, onSelect }) => (
   <button
@@ -223,6 +222,42 @@ const GeoFencing = () => {
     fetchZones();
   }, []);
 
+  // Live drivers and the vehicle types that decide their map icons.
+  const [drivers, setDrivers] = useState([]);
+  const [vehicleTypes, setVehicleTypes] = useState([]);
+
+  useEffect(() => {
+    adminService.getVehicleTypes()
+      .then((res) => {
+        const list = res?.data?.results || res?.results || res?.data || [];
+        setVehicleTypes(Array.isArray(list) ? list : []);
+      })
+      .catch(() => setVehicleTypes([]));
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadDrivers = async () => {
+      try {
+        const res = await adminService.getDrivers(1, 1000, {});
+        // Same shape God's Eye reads.
+        const list = res?.data?.results || res?.data || [];
+        if (!cancelled) setDrivers(Array.isArray(list) ? list : []);
+      } catch (error) {
+        // Keep the last positions on screen rather than blanking the map.
+        console.error('Failed to fetch drivers', error);
+      }
+    };
+    loadDrivers();
+    const timer = setInterval(loadDrivers, DRIVER_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  const vehicleTypeIndex = useMemo(() => buildVehicleTypeIndex(vehicleTypes), [vehicleTypes]);
+
   const filteredZones = useMemo(() => {
     const query = searchValue.trim().toLowerCase();
     if (!query) {
@@ -241,8 +276,8 @@ const GeoFencing = () => {
 
   const mapCenter = selectedZone?.center || zones[0]?.center || DEFAULT_CENTER;
 
-  const fleetMarkers = useMemo(() => createFleetMarkers(zones), [zones]);
-  const onlineCount = fleetMarkers.filter((marker) => marker.kind === 'driver').length;
+  const fleetMarkers = useMemo(() => createFleetMarkers(drivers, vehicleTypeIndex), [drivers, vehicleTypeIndex]);
+  const onlineCount = fleetMarkers.length;
   const activeZoneCount = zones.filter((zone) => zone.status === 'Active').length;
   const averageSurge =
     zones.length > 0
@@ -353,12 +388,9 @@ const GeoFencing = () => {
                 position={marker.position}
                 title={marker.label}
                 icon={{
-                  path: window.google.maps.SymbolPath.CIRCLE,
-                  scale: marker.kind === 'driver' ? 6 : 5,
-                  fillColor: marker.kind === 'driver' ? '#10B981' : '#F97316',
-                  fillOpacity: 1,
-                  strokeColor: '#ffffff',
-                  strokeWeight: 2
+                  url: marker.icon,
+                  scaledSize: new window.google.maps.Size(32, 32),
+                  anchor: new window.google.maps.Point(16, 16)
                 }}
               />
             ))}
