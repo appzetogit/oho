@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { ApiError } from '../../../../utils/ApiError.js';
+import { getReviewOtp } from '../../../../utils/reviewOtp.js';
 import { env } from '../../../../config/env.js';
 import { Owner } from '../../admin/models/Owner.js';
 import { ServiceStore } from '../../admin/models/ServiceStore.js';
@@ -69,6 +70,11 @@ const getStaticDriverOtpConfig = () => ({
   otp: String(env.sms?.staticOtpCode || TEST_LOGIN_OTP_CODE).trim(),
 });
 const resolveDriverLoginOtpForPhone = (phone) => {
+  const reviewOtp = getReviewOtp(phone);
+  if (reviewOtp) {
+    return { otp: reviewOtp, isStatic: true };
+  }
+
   const normalizedPhone = normalizePhone(phone);
   const staticOtpConfig = getStaticDriverOtpConfig();
   const defaultOtpEnabled = isTruthy(env.sms?.useDefaultOtp);

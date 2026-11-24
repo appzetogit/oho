@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { ApiError } from '../../../../utils/ApiError.js';
+import { getReviewOtp } from '../../../../utils/reviewOtp.js';
 import { env } from '../../../../config/env.js';
 import { UserAuthSession } from '../models/UserAuthSession.js';
 import { User } from '../models/User.js';
@@ -32,6 +33,11 @@ const getStaticUserOtpConfig = () => ({
   otp: String(env.sms?.staticOtpCode || TEST_LOGIN_OTP_CODE).trim(),
 });
 const resolveUserOtpForPhone = (phone) => {
+  const reviewOtp = getReviewOtp(phone);
+  if (reviewOtp) {
+    return { otp: reviewOtp, isStatic: true };
+  }
+
   const normalizedPhone = normalizeUserPhone(phone);
   const staticOtpConfig = getStaticUserOtpConfig();
   const defaultOtpEnabled = isTruthy(env.sms?.useDefaultOtp);
