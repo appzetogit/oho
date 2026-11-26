@@ -12,7 +12,6 @@ temp_interactive_push.bat
 scratch/
 
 # Environment files - never commit real secrets
-.env
-.env.*
 !.env.example
 !.env.production.example
+config.bat

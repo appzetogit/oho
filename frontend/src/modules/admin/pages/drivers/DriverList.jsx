@@ -62,7 +62,9 @@ const DriverList = ({ mode = 'approved' }) => {
           driverCode: d.driver_code || d.referralCode || (d.phone ? `DRV${String(d.phone).slice(-4)}${String(d._id || d.id || '').slice(-6).toUpperCase()}`.replace(/\W/g, '') : 'N/A'),
           serviceLocation: d.service_location_name || d.city || d.service_location?.name || 'India',
           phone: d.phone || d.mobile || 'N/A',
-          transportType: d.transport_type || d.register_for || d.vehicle_type || 'All - Bike',
+          // transport_type is the service (taxi / delivery / both), not the
+          // vehicle, so a bike driver read as "taxi". Lead with the vehicle.
+          transportType: [d.vehicle_type, d.transport_type || d.register_for].filter(Boolean).join(' · ') || 'N/A',
           rating: Number(d.rating_count || d.ratingCount || 0) > 0
             ? Number(d.rating || d.average_rating || d.avg_rating || 0)
             : 0,

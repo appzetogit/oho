@@ -136,7 +136,9 @@ const PendingDrivers = () => {
           driverCode: d.driver_code || d.referralCode || (d.phone ? `DRV${String(d.phone).slice(-4)}${String(d._id || d.id || '').slice(-6).toUpperCase()}`.replace(/\W/g, '') : 'N/A'),
           serviceLocation: d.service_location_name || d.city || 'India',
           phone: d.phone || d.mobile || 'N/A',
-          transport: d.transport_type || d.register_for || d.transport_type || 'N/A',
+          // transport_type is the service (taxi / delivery / both), not the
+          // vehicle, so a bike driver read as "taxi". Lead with the vehicle.
+          transport: [d.vehicle_type, d.transport_type || d.register_for].filter(Boolean).join(' · ') || 'N/A',
           docs: 'View Docs',
           status: (String(d.status || '').toUpperCase() || 'PENDING'),
           reason: d.rejectionReason || d.rejected_reason || '-',

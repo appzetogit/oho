@@ -499,6 +499,7 @@ export const updateRideStatus = async (req, res) => {
     nextStatus,
     paymentMethod: req.body.paymentMethod,
     otp: req.body.otp,
+    coordinates: req.body.coordinates,
   });
 
   try {

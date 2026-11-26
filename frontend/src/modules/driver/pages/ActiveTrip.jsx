@@ -39,6 +39,11 @@ const MAP_CONTAINER_STYLE = {
 const DEFAULT_CENTER = { lat: 22.7196, lng: 75.8577 };
 const DEFAULT_DRIVER_COORDS = [75.8577, 22.7196];
 const ARRIVAL_RADIUS_METERS = 100;
+// Phone GPS in a city is often off by 30–80 m. Without this slack a driver
+// standing next to the rider could read "80 m away" and be locked out of
+// "I have arrived". Capped so a very poor fix cannot unlock from far away.
+const MAX_GPS_ACCURACY_SLACK_METERS = 60;
+const SIMULATION_ALLOWED = Boolean(import.meta.env.DEV);
 const ROUTE_SIMPLIFY_TOLERANCE = 0.00008;
 const ROUTE_OFF_PATH_METERS = 45;
 const ROUTE_REFRESH_DEBOUNCE_MS = 2500;
@@ -707,8 +712,14 @@ const formatDistanceLabel = (meters) => {
         return 'Nearby';
     }
 
+    // Used to floor every distance at 50 m, so a driver at the door still read
+    // "50 m away". Under 30 m is inside normal GPS error: call it nearby.
+    if (distance < 30) {
+        return 'Nearby';
+    }
+
     if (distance < 1000) {
-        return `${Math.max(50, Math.round(distance / 10) * 10)} m away`;
+        return `${Math.round(distance / 10) * 10} m away`;
     }
 
     return `${(distance / 1000).toFixed(distance >= 10000 ? 0 : 1)} km away`;
@@ -1035,6 +1046,7 @@ const ActiveTrip = () => {
     const [waitingNow, setWaitingNow] = useState(Date.now());
     const [map, setMap] = useState(null);
     const [driverPosition, setDriverPosition] = useState(initialDriverPosition);
+    const [gpsAccuracyMeters, setGpsAccuracyMeters] = useState(null);
     const [driverHeading, setDriverHeading] = useState(null);
     const [routePath, setRoutePath] = useState([]);
     const [routeError, setRouteError] = useState('');
@@ -1428,8 +1440,9 @@ const ActiveTrip = () => {
         : 0;
     const freeWaitingRemainingSeconds = Math.max(0, freeWaitingBeforeMinutes * 60 - waitingElapsedSeconds);
     const waitingChargeableMinutes = Math.max(0, Math.ceil(waitingElapsedSeconds / 60) - freeWaitingBeforeMinutes);
-    const canMarkArrived = pickupDistanceMeters <= ARRIVAL_RADIUS_METERS;
-    const canDeliverParcel = dropDistanceMeters <= ARRIVAL_RADIUS_METERS;
+    const gpsSlackMeters = Math.min(MAX_GPS_ACCURACY_SLACK_METERS, Math.max(0, Number(gpsAccuracyMeters) || 0));
+    const canMarkArrived = pickupDistanceMeters <= ARRIVAL_RADIUS_METERS + gpsSlackMeters;
+    const canDeliverParcel = dropDistanceMeters <= ARRIVAL_RADIUS_METERS + gpsSlackMeters;
     const isWaitingForOtp = phase === 'otp_verification' && Boolean(waitingStartedAt);
     const pickupContact = isParcel ? tripData.sender : tripData.user;
     const destinationContact = isParcel ? tripData.receiver : tripData.user;
@@ -1529,8 +1542,17 @@ const ActiveTrip = () => {
             rideId,
             status: nextStatus,
             paymentMethod: paymentMode || undefined,
+            coordinates: getDriverCoordinatesForServer(),
             ...(driverPaymentCollection ? { driverPaymentCollection } : {}),
         });
+    };
+
+    // The server only lets a ride be marked arrived / completed near the drop
+    // point, so every status change carries where the driver is right now.
+    const getDriverCoordinatesForServer = () => {
+        const lat = Number(driverPosition?.lat);
+        const lng = Number(driverPosition?.lng);
+        return Number.isFinite(lat) && Number.isFinite(lng) ? [lng, lat] : undefined;
     };
 
     const completeRideAndExit = async () => {
@@ -1563,10 +1585,15 @@ const ActiveTrip = () => {
         navigate('/taxi/driver/home');
     };
 
+    // Returns false when the server refused to close the ride (e.g. the driver is
+    // not at the drop point), so the caller keeps the driver on this screen
+    // instead of showing a finished trip the server never recorded.
     const completeRideForUserSync = async (paymentMode = '') => {
         if (!rideId) {
-            return;
+            return false;
         }
+
+        setArrivalGuardError('');
 
         try {
             const driverToken = getLocalDriverToken();
@@ -1575,6 +1602,7 @@ const ActiveTrip = () => {
                 {
                     status: 'completed',
                     paymentMethod: paymentMode || undefined,
+                    coordinates: getDriverCoordinatesForServer(),
                     driverPaymentCollection: buildDriverPaymentCollection({
                         mode: paymentMode,
                         status: driverPaymentStatus,
@@ -1583,11 +1611,17 @@ const ActiveTrip = () => {
                 },
                 withDriverAuthorization(driverToken),
             );
-        } catch {
-            // The socket publish below remains as a realtime fallback for the rider side.
+        } catch (error) {
+            const status = Number(error?.status || 0);
+            if (status >= 400 && status < 500) {
+                setArrivalGuardError(error?.message || 'Could not end the ride. Please try again.');
+                return false;
+            }
+            // Network failure: the socket publish below remains as a realtime fallback.
         }
 
         publishRideStatus('completed', paymentMode);
+        return true;
     };
 
     useEffect(() => {
@@ -1642,6 +1676,9 @@ const ActiveTrip = () => {
     };
 
     const startSimulation = () => {
+        if (!SIMULATION_ALLOWED) {
+            return;
+        }
         const nextPath = getSimulationPath({
             routePath,
             from: driverPosition,
@@ -1904,6 +1941,7 @@ const ActiveTrip = () => {
                     lat: pos.coords.latitude,
                     lng: pos.coords.longitude,
                 };
+                setGpsAccuracyMeters(Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : null);
 
                 setDriverPosition((previousPosition) => {
                     hasResolvedLivePositionRef.current = true;
@@ -2359,6 +2397,9 @@ const ActiveTrip = () => {
                     </div>
                 )}
 
+                {/* Test-only: it drives fake GPS along the route, which let any
+                    driver "reach" pickup and drop without moving. Dev builds only. */}
+                {SIMULATION_ALLOWED && (
                 <div className="absolute top-44 left-4 z-40 w-[190px] rounded-2xl border border-white/80 bg-white/94 px-3 py-3 shadow-lg backdrop-blur-md">
                     <div className="mb-2 flex items-center justify-between gap-2">
                         <div className="min-w-0">
@@ -2400,6 +2441,7 @@ const ActiveTrip = () => {
                         Test mode emits live location events along this polyline.
                     </p>
                 </div>
+                )}
             </div>
 
             <div className="absolute bottom-0 left-0 right-0 z-40">
@@ -2596,13 +2638,13 @@ const ActiveTrip = () => {
                                 </div>
                                 <button onClick={() => callContact(destinationContact?.phone)} className="shrink-0 w-9 h-9 bg-white rounded-lg border border-slate-100 flex items-center justify-center" style={{ color: routeStrokeColor }} aria-label="Call destination contact"><Phone size={16} strokeWidth={2.5} /></button>
                             </div>
-                            {isParcel && (
+                            {(
                                 <div className="mb-4 rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-3">
                                     <div className="flex items-center justify-between gap-3">
                                         <div>
-                                            <p className="text-[9px] font-black uppercase tracking-[0.22em] text-slate-400">Delivery Radius</p>
+                                            <p className="text-[9px] font-black uppercase tracking-[0.22em] text-slate-400">{isParcel ? 'Delivery Radius' : 'Drop Radius'}</p>
                                             <p className="mt-1 text-[12px] font-black text-slate-900">
-                                                {Math.round(dropDistanceMeters)} m away from receiver
+                                                {Math.round(dropDistanceMeters)} m away from {isParcel ? 'receiver' : 'drop point'}
                                             </p>
                                         </div>
                                         <div className={`rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] ${canDeliverParcel ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-amber-50 text-amber-600 border border-amber-100'}`}>
@@ -2611,7 +2653,7 @@ const ActiveTrip = () => {
                                     </div>
                                 </div>
                             )}
-                            {isParcel && arrivalGuardError && (
+                            {arrivalGuardError && (
                                 <p className="-mt-1 mb-4 text-center text-[11px] font-black text-red-500 uppercase tracking-wider">
                                     {arrivalGuardError}
                                 </p>
@@ -2619,8 +2661,12 @@ const ActiveTrip = () => {
                             <Motion.button
                                 whileTap={{ scale: 0.96 }}
                                 onClick={() => {
-                                    if (isParcel && !canDeliverParcel) {
-                                        setArrivalGuardError('Reach within 100 meters of receiver before delivering parcel.');
+                                    // Rides too, not just parcels: ending a ride away from
+                                    // the drop point is how fake self-booked trips got paid.
+                                    if (!canDeliverParcel) {
+                                        setArrivalGuardError(isParcel
+                                            ? 'Reach within 100 meters of receiver before delivering parcel.'
+                                            : 'Reach within 100 meters of the drop point to end the ride.');
                                         return;
                                     }
 
@@ -2632,7 +2678,7 @@ const ActiveTrip = () => {
                                     setDriverPaymentStatus('pending');
                                     setPhase('payment_confirm');
                                 }}
-                                className={`w-full h-15 text-white rounded-xl flex items-center justify-center gap-3 text-[14px] font-semibold uppercase tracking-wide shadow-xl transition-opacity ${isParcel && !canDeliverParcel ? 'opacity-70' : ''}`}
+                                className={`w-full h-15 text-white rounded-xl flex items-center justify-center gap-3 text-[14px] font-semibold uppercase tracking-wide shadow-xl transition-opacity ${!canDeliverParcel ? 'opacity-70' : ''}`}
                                 style={{ backgroundColor: routeStrokeColor, boxShadow: `0 18px 30px ${routeAccentMuted}` }}
                             >
                                 {isParcel ? 'Deliver Parcel' : 'Arrived at Destination'} <ChevronRight size={18} strokeWidth={3} />
@@ -2787,6 +2833,11 @@ const ActiveTrip = () => {
                                     <p className="text-[11px] font-bold text-red-500">{paymentQrError}</p>
                                 </div>
                             )}
+                            {arrivalGuardError && (
+                                <div className="mb-6 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-center">
+                                    <p className="text-[11px] font-bold text-red-500">{arrivalGuardError}</p>
+                                </div>
+                            )}
                             {selectedPaymentMode === 'cash' && driverPaymentStatus === 'success' && (
                                 <Motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mb-6 rounded-3xl border border-emerald-100 bg-emerald-50/80 p-5 text-center shadow-lg">
                                     <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl text-white shadow-lg" style={{ backgroundColor: routeStrokeColor }}>
@@ -2799,8 +2850,9 @@ const ActiveTrip = () => {
                                     </p>
                                     <button
                                         onClick={async () => {
-                                            await completeRideForUserSync('cash');
-                                            setPhase('review');
+                                            if (await completeRideForUserSync('cash')) {
+                                                setPhase('review');
+                                            }
                                         }}
                                         className="mt-4 w-full rounded-xl py-3 text-[11px] font-black uppercase tracking-[0.16em] text-white shadow-lg"
                                         style={{ backgroundColor: routeStrokeColor, boxShadow: `0 16px 28px ${routeAccentMuted}` }}
@@ -2880,8 +2932,9 @@ const ActiveTrip = () => {
                                 disabled={driverPaymentStatus !== 'success' || selectedPaymentMode === 'cash'}
                                 onClick={async () => {
                                     const paymentMode = selectedPaymentMode || effectiveState?.paymentMethod || liveRequest?.payment || '';
-                                    await completeRideForUserSync(paymentMode);
-                                    setPhase('review');
+                                    if (await completeRideForUserSync(paymentMode)) {
+                                        setPhase('review');
+                                    }
                                 }}
                                 className={`w-full h-15 rounded-xl flex items-center justify-center gap-3 text-[14px] font-semibold uppercase tracking-wide shadow-xl transition-all ${driverPaymentStatus === 'success' && selectedPaymentMode !== 'cash' ? 'text-white' : 'bg-slate-100 text-slate-300 pointer-events-none'}`}
                                 style={driverPaymentStatus === 'success' && selectedPaymentMode !== 'cash' ? { backgroundColor: routeStrokeColor, boxShadow: `0 18px 30px ${routeAccentMuted}` } : undefined}

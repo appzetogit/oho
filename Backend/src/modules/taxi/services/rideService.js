@@ -1755,11 +1755,65 @@ const rideStatusConfig = {
   },
   [RIDE_LIVE_STATUS.COMPLETED]: {
     persistedStatus: RIDE_STATUS.COMPLETED,
-    allowedCurrent: [RIDE_LIVE_STATUS.STARTED, RIDE_LIVE_STATUS.ARRIVED, RIDE_LIVE_STATUS.ARRIVING, RIDE_LIVE_STATUS.ACCEPTED],
+    // Used to also allow ACCEPTED and ARRIVING, so a driver could book himself
+    // from a second phone, accept, and "complete" without ever starting the
+    // trip — collecting the per-ride incentive while sitting at home.
+    allowedCurrent: [RIDE_LIVE_STATUS.STARTED, RIDE_LIVE_STATUS.ARRIVED],
   },
 };
 
-export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymentMethod, otp }) => {
+// A ride can only be closed out near its drop point (the Rapido rule). The
+// driver app already checks ~100 m on screen; the server allows more slack for
+// GPS drift. Set RIDE_DROP_COMPLETION_RADIUS_METERS=0 to switch the check off.
+const DROP_COMPLETION_RADIUS_METERS = (() => {
+  const configured = Number(process.env.RIDE_DROP_COMPLETION_RADIUS_METERS);
+  return process.env.RIDE_DROP_COMPLETION_RADIUS_METERS !== undefined && Number.isFinite(configured) && configured >= 0
+    ? configured
+    : 250;
+})();
+// A location older than this says nothing about where the driver is now.
+const DROP_LOCATION_MAX_AGE_MS = 2 * 60 * 1000;
+
+const assertDriverNearDrop = (ride, reportedCoordinates) => {
+  if (DROP_COMPLETION_RADIUS_METERS <= 0) return;
+  // Website bookings carry a placeholder point (the form has no map), so their
+  // drop coordinates cannot be checked against.
+  if (ride.bookingSource === 'website') return;
+
+  const drop = ride.dropLocation?.coordinates;
+  if (!Array.isArray(drop) || drop.length !== 2) return;
+
+  let driverCoordinates = null;
+  if (reportedCoordinates) {
+    try {
+      driverCoordinates = normalizePoint(reportedCoordinates, 'coordinates');
+    } catch {
+      driverCoordinates = null;
+    }
+  }
+  if (!driverCoordinates) {
+    const last = ride.lastDriverLocation;
+    const lastAt = last?.updatedAt ? new Date(last.updatedAt).getTime() : 0;
+    if (Array.isArray(last?.coordinates) && last.coordinates.length === 2 && Date.now() - lastAt <= DROP_LOCATION_MAX_AGE_MS) {
+      driverCoordinates = [...last.coordinates];
+    }
+  }
+
+  if (!driverCoordinates) {
+    throw new ApiError(409, 'Your live location is not reaching us. Turn on GPS and try again at the drop point.');
+  }
+
+  const distance = haversineMeters(driverCoordinates, [...drop]);
+  if (!Number.isFinite(distance)) return;
+  if (distance > DROP_COMPLETION_RADIUS_METERS) {
+    throw new ApiError(
+      409,
+      `You are ${Math.round(distance)} m from the drop point. Reach the drop location to end the ride.`,
+    );
+  }
+};
+
+export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymentMethod, otp, coordinates = null }) => {
   const config = rideStatusConfig[nextStatus];
 
   if (!config) {
@@ -1774,6 +1828,11 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
 
   if (!config.allowedCurrent.includes(ride.liveStatus)) {
     throw new ApiError(409, `Ride cannot move from ${ride.liveStatus} to ${nextStatus}`);
+  }
+
+  // "Arrived at destination" and "complete" both need the driver at the drop.
+  if (nextStatus === RIDE_LIVE_STATUS.ARRIVED || nextStatus === RIDE_LIVE_STATUS.COMPLETED) {
+    assertDriverNearDrop(ride, coordinates);
   }
 
   // The trip may only start with the PIN shown in the rider's app. Before this

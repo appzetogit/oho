@@ -6046,7 +6046,10 @@ const toAdminRideRow = (ride) => {
     date: ride.createdAt,
     userName: ride.userId?.name || 'Unknown User',
     driverName: ride.driverId?.name || 'Unassigned',
-    transportType: ride.driverId?.vehicleType || ride.vehicleIconType || 'Taxi',
+    // What the customer booked (auto / bike / car) comes first; the driver's own
+    // vehicle is only a fallback for old rides saved without a vehicle type.
+    transportType: ride.vehicleTypeId?.icon_types || ride.vehicleIconType || ride.driverId?.vehicleType || 'Taxi',
+    vehicleName: ride.vehicleTypeId?.name || '',
     tripStatus,
     rideStatus: ride.status,
     liveStatus: ride.liveStatus,
@@ -6562,7 +6565,10 @@ const listAdminRides = async ({
         .skip((page - 1) * limit)
         .limit(limit)
         .populate('userId', 'name phone')
-        .populate('driverId', 'name phone vehicleType vehicleNumber');
+        .populate('driverId', 'name phone vehicleType vehicleNumber')
+        // The vehicle the customer asked for. Without it a request nobody has
+        // accepted yet showed as "Taxi", so staff could not tell auto from bike.
+        .populate('vehicleTypeId', 'name icon_types');
 
       if (includeParcel) {
         rideQuery = rideQuery.populate('deliveryId');

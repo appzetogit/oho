@@ -44,6 +44,7 @@ const normalizeRow = (row = {}) => ({
   userName: row.userName || row.user_name || row.customer_name || row.user?.name || '--',
   driverName: row.driverName || row.driver_name || row.driver?.name || '--',
   transportType: row.transportType || row.transport_type || row.service_type || row.module || '--',
+  vehicleName: row.vehicleName || '',
   tripStatus: String(row.tripStatus || row.trip_status || row.status || '').toUpperCase(),
   paymentOption: String(row.paymentOption || row.payment_option || row.payment_method || 'CASH').toUpperCase(),
   // The API has always sent these; the panel simply dropped them, so staff
@@ -88,7 +89,10 @@ const TripDetailsModal = ({ trip, onClose }) => {
             </div>
             <div>
               <p className="text-[11px] uppercase tracking-wider font-bold text-gray-400 mb-1">Transport Type</p>
-              <p className="text-[13px] font-bold text-gray-900 capitalize">{String(trip.transportType).toLowerCase()}</p>
+              <p className="text-[13px] font-bold text-gray-900 capitalize">
+                {String(trip.transportType).toLowerCase()}
+                {trip.vehicleName ? <span className="ml-1 text-gray-500 normal-case">({trip.vehicleName})</span> : null}
+              </p>
             </div>
             <div>
               <p className="text-[11px] uppercase tracking-wider font-bold text-gray-400 mb-1">Payment Option</p>
@@ -530,6 +534,7 @@ const Trips = () => {
                     className="w-full h-8 border border-gray-200 rounded-md bg-gray-50 px-2 text-xs outline-none focus:border-yellow-400"
                   >
                     <option value="">All Types</option>
+                    <option value="car">Car</option>
                     <option value="taxi">Taxi</option>
                     <option value="auto">Auto</option>
                     <option value="bike">Bike</option>
@@ -627,7 +632,12 @@ const Trips = () => {
                       <td className="px-4 py-2 text-[13px] font-semibold text-gray-500">
                          {row.driverName !== '--' ? row.driverName : <span className="text-gray-300 italic">Unassigned</span>}
                       </td>
-                      <td className="px-4 py-2 text-[13px] font-bold text-gray-700 capitalize">{row.transportType.toLowerCase()}</td>
+                      <td className="px-4 py-2 text-[13px] font-bold text-gray-700 capitalize">
+                        {row.transportType.toLowerCase()}
+                        {row.vehicleName && row.vehicleName.toLowerCase() !== row.transportType.toLowerCase() ? (
+                          <span className="ml-1 text-[11px] font-semibold text-gray-400 normal-case">({row.vehicleName})</span>
+                        ) : null}
+                      </td>
                       <td className="px-4 py-2">
                         <span className={`inline-flex items-center px-2 py-0.5 text-[10px] font-bold rounded capitalize tracking-wide ${STATUS_STYLES[row.tripStatus] || 'bg-gray-100 text-gray-600'}`}>
                           {row.tripStatus ? row.tripStatus.toLowerCase() : 'Unknown'}
